@@ -25,14 +25,14 @@ TYPE = "stable"
 TYPE_COLORS = {"dev": 33, "stable": 90, "pip": 34}
 VERSION_STRING = "nostradamus/%s#%s" % ('.'.join(VERSION.split('.')[:-1]) if VERSION.count('.') > 2 and VERSION.split('.')[-1] == '0' else VERSION, TYPE)
 DESCRIPTION = "SQL injection exploitation tool with predictive schema inference"
-SITE = "https://github.com/yourusername/nostradamus"
+SITE = "https://github.com/nekros1xx/nostradamus"
 DEFAULT_USER_AGENT = "%s (%s)" % (VERSION_STRING, SITE)
 DEV_EMAIL_ADDRESS = "dev@nostradamus.local"
-ISSUES_PAGE = "https://github.com/yourusername/nostradamus/issues/new"
-GIT_REPOSITORY = "https://github.com/yourusername/nostradamus.git"
-GIT_PAGE = "https://github.com/yourusername/nostradamus"
-WIKI_PAGE = "https://github.com/yourusername/nostradamus/wiki/"
-ZIPBALL_PAGE = "https://github.com/yourusername/nostradamus/zipball/master"
+ISSUES_PAGE = "https://github.com/nekros1xx/nostradamus/issues/new"
+GIT_REPOSITORY = "https://github.com/nekros1xx/nostradamus.git"
+GIT_PAGE = "https://github.com/nekros1xx/nostradamus"
+WIKI_PAGE = "https://github.com/nekros1xx/nostradamus/wiki/"
+ZIPBALL_PAGE = "https://github.com/nekros1xx/nostradamus/zipball/master"
 
 # colorful banner
 _BANNER_ART = r"""

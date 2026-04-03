@@ -33,13 +33,13 @@ SuiteCRM (CVE-2024-36412), vTiger CRM (CVE-2019-11057), Dolibarr ERP (CVE-2018-1
 ### Linux / macOS
 
 ```bash
-git clone https://github.com/yourusername/nostradamus.git && cd nostradamus && chmod +x install.sh && ./install.sh
+git clone https://github.com/nekros1xx/nostradamus.git && cd nostradamus && chmod +x install.sh && ./install.sh
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/yourusername/nostradamus.git; cd nostradamus; .\install.bat
+git clone https://github.com/nekros1xx/nostradamus.git; cd nostradamus; .\install.bat
 ```
 
 After installation, restart your terminal. The `nostradamus` command will be available globally from any directory.
@@ -121,7 +121,7 @@ At the end of each run, Nostradamus shows prediction statistics with real measur
 
 ## Credits
 
-Built on top of [sqlmap](https://github.com/sqlmapproject/sqlmap) by the sqlmap developers. The prediction engine and CMS/framework table definitions are original work.
+Built on top of [sqlmap](https://github.com/sqlmapproject/sqlmap) by the sqlmap developers. The prediction engine and CMS/framework table definitions are original work of [Sergio Cabrera](https://www.linkedin.com/in/sergio-cabrera-878766239/).
 
 ## License
 
