@@ -366,6 +366,87 @@ class Databases(object):
                     singleTimeLogMessage(infoMsg)
                     continue
 
+                # ─── Nostradamus: Quick Schema Dump ───
+                # If CMS is detected, try verifying all known tables with single
+                # equality queries before falling back to character-by-character extraction.
+                # Each table is checked with: SELECT COUNT(*) FROM information_schema.tables
+                #   WHERE table_schema='db' AND table_name='candidate_table'
+                if (kb.get("predictor") and not conf.get("noPredict")
+                        and kb.predictor._detected_cms
+                        and Backend.isDbms(DBMS.MYSQL)):
+                    quickTables = kb.predictor.get_quick_schema_tables()
+                    if quickTables:
+                        infoMsg = "quick schema: trying %d known tables for CMS '%s'" % (
+                            len(quickTables), kb.predictor._detected_cms)
+                        logger.info(infoMsg)
+
+                        confirmedTables = []
+                        for candidateTable in quickTables:
+                            # Use information_schema.tables to check existence
+                            checkQuery = "SELECT COUNT(*) FROM information_schema.tables " \
+                                         "WHERE table_schema='%s' AND table_name='%s'" % (
+                                             unsafeSQLIdentificatorNaming(db), candidateTable)
+
+                            result = inject.getValue(checkQuery, union=False, error=False,
+                                                     expected=EXPECTED.INT, charsetType=CHARSET_TYPE.DIGITS)
+
+                            if result and str(result).strip() not in ("0", ""):
+                                confirmedTables.append(safeSQLIdentificatorNaming(candidateTable, True))
+                                # Teach predictor about this table
+                                kb.predictor.learn(candidateTable)
+
+                        if confirmedTables:
+                            # Log stats
+                            statsLines = kb.predictor.get_quick_schema_stats(len(confirmedTables), len(quickTables))
+                            if statsLines:
+                                for line in statsLines:
+                                    logger.info(line)
+
+                            kb.data.cachedTables[db] = confirmedTables
+
+                            # Still need to check if there are tables NOT in the known list
+                            # Get the actual count from DB
+                            for _query, _count in ((rootQuery.blind.query, rootQuery.blind.count), (getattr(rootQuery.blind, "query2", None), getattr(rootQuery.blind, "count2", None))):
+                                if _count is None:
+                                    break
+
+                                if Backend.getIdentifiedDbms() not in (DBMS.SQLITE, DBMS.FIREBIRD, DBMS.MAXDB, DBMS.ACCESS, DBMS.MCKOI, DBMS.EXTREMEDB):
+                                    countQuery = _count % unsafeSQLIdentificatorNaming(db)
+                                else:
+                                    countQuery = _count
+
+                                totalCount = inject.getValue(countQuery, union=False, error=False,
+                                                             expected=EXPECTED.INT, charsetType=CHARSET_TYPE.DIGITS)
+
+                                if isNumPosStrValue(totalCount):
+                                    totalCount = int(totalCount)
+                                    remaining = totalCount - len(confirmedTables)
+
+                                    if remaining > 0:
+                                        infoMsg = "quick schema found %d/%d tables, extracting %d remaining via blind" % (
+                                            len(confirmedTables), totalCount, remaining)
+                                        logger.info(infoMsg)
+                                        # Don't break - let the normal extraction below handle remaining tables
+                                        # Clear cachedTables so the normal path runs, then merge
+                                        quickFound = list(confirmedTables)
+                                        kb.data.cachedTables.clear()
+                                    else:
+                                        infoMsg = "quick schema found all %d tables" % len(confirmedTables)
+                                        logger.info(infoMsg)
+                                        quickFound = None  # no remaining tables to find
+
+                                break
+                            else:
+                                quickFound = None
+
+                            # If we found everything, skip the normal extraction for this db
+                            if quickFound is None and db in kb.data.cachedTables:
+                                continue
+                            elif quickFound is not None:
+                                # Will fall through to normal extraction below
+                                # After normal extraction, merge with quick results
+                                pass
+
                 for _query, _count in ((rootQuery.blind.query, rootQuery.blind.count), (getattr(rootQuery.blind, "query2", None), getattr(rootQuery.blind, "count2", None))):
                     if _query is None:
                         break
@@ -449,6 +530,13 @@ class Databases(object):
                         warnMsg = "unable to retrieve the table names "
                         warnMsg += "for database '%s'" % unsafeSQLIdentificatorNaming(db)
                         logger.warning(warnMsg)
+
+                # ─── Nostradamus: Merge quick schema results ───
+                if 'quickFound' in dir() and quickFound is not None:
+                    existing = kb.data.cachedTables.get(db, [])
+                    merged = list(set(existing + quickFound))
+                    kb.data.cachedTables[db] = merged
+                    quickFound = None  # reset for next db
 
         if isNoneValue(kb.data.cachedTables):
             kb.data.cachedTables.clear()

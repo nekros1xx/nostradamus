@@ -3,7 +3,6 @@
 """
 Copyright (c) 2006-2026 sqlmap developers (https://sqlmap.org)
 See the file 'LICENSE' for copying permission
-Modifications made by Sergio Cabrera - https://www.linkedin.com/in/sergio-cabrera-878766239/
 """
 
 import os
@@ -774,6 +773,162 @@ class SchemaPredictor(object):
         "ghost": ["posts", "posts_tags", "roles_users"],
     }
 
+    # HTTP fingerprints for passive CMS detection from headers/cookies/body
+    HTTP_FINGERPRINTS = {
+        "wordpress": {
+            "headers": ["x-powered-by: php", "link: <.*wp-json"],
+            "cookies": ["wordpress_logged_in", "wordpress_test_cookie", "wp-settings"],
+            "body": ["/wp-content/", "/wp-includes/", "/wp-admin/", "wp-login.php",
+                     "WordPress", "/xmlrpc.php"],
+        },
+        "joomla": {
+            "headers": [],
+            "cookies": ["joomla_user_state", "jpanesliders"],
+            "body": ["/administrator/", "/components/com_", "/modules/mod_",
+                     "Joomla!", "/media/jui/", "option=com_"],
+        },
+        "drupal": {
+            "headers": ["x-drupal-cache", "x-drupal-dynamic-cache", "x-generator: drupal"],
+            "cookies": ["SESSa", "SSESSa", "Drupal.visitor"],
+            "body": ["/sites/default/files/", "/core/misc/drupal.js",
+                     "Drupal.settings", "drupal.org", "/core/misc/drupal.js"],
+        },
+        "magento": {
+            "headers": ["x-magento-vary"],
+            "cookies": ["PHPSESSID", "mage-cache-storage", "mage-messages",
+                         "form_key", "mage-cache-sessid"],
+            "body": ["/skin/frontend/", "/media/catalog/", "Mage.Cookies",
+                     "Magento_Ui", "/checkout/cart/"],
+        },
+        "django": {
+            "headers": [],
+            "cookies": ["csrftoken", "django_language", "sessionid"],
+            "body": ["csrfmiddlewaretoken", "__admin/", "django"],
+        },
+        "laravel": {
+            "headers": [],
+            "cookies": ["laravel_session", "XSRF-TOKEN"],
+            "body": ["laravel", "csrf-token"],
+        },
+        "rails": {
+            "headers": ["x-powered-by: phusion passenger", "x-runtime"],
+            "cookies": ["_session_id"],
+            "body": ["authenticity_token", "csrf-token", "rails"],
+        },
+        "prestashop": {
+            "headers": ["powered-by: prestashop"],
+            "cookies": ["PrestaShop"],
+            "body": ["/modules/", "/themes/", "prestashop", "id_product"],
+        },
+        "moodle": {
+            "headers": [],
+            "cookies": ["MoodleSession"],
+            "body": ["/course/view.php", "/mod/", "/login/index.php", "moodle"],
+        },
+        "phpbb": {
+            "headers": [],
+            "cookies": ["phpbb_sid", "phpbb_u", "phpbb_k"],
+            "body": ["phpBB", "viewtopic.php", "viewforum.php", "memberlist.php"],
+        },
+        "nextcloud": {
+            "headers": [],
+            "cookies": ["nc_session_id", "oc_sessionPassphrase"],
+            "body": ["nextcloud", "/ocs/v2.php", "/remote.php/"],
+        },
+        "mediawiki": {
+            "headers": ["x-powered-by: mediawiki"],
+            "cookies": ["mediawiki", "wikiSession"],
+            "body": ["mediawiki", "wgArticleId", "/wiki/", "Special:"],
+        },
+    }
+
+    # Common database names for CMS/frameworks
+    CMS_DATABASE_NAMES = {
+        "wordpress": [
+            "wordpress", "wp", "wp_database", "wpdb", "wp_site",
+            "bitnami_wordpress", "wordpress_db", "wpsite",
+            "blog", "blog_db", "website", "cms",
+        ],
+        "joomla": [
+            "joomla", "joomla_db", "joomladb", "joomla_site",
+            "bitnami_joomla", "cms", "website",
+        ],
+        "drupal": [
+            "drupal", "drupal_db", "drupaldb", "drupal_site",
+            "bitnami_drupal", "cms", "website",
+        ],
+        "magento": [
+            "magento", "magento_db", "magentodb", "magento2",
+            "bitnami_magento", "ecommerce", "shop", "store",
+        ],
+        "prestashop": [
+            "prestashop", "prestashop_db", "presta", "presta_shop",
+            "bitnami_prestashop", "ecommerce", "shop", "store",
+        ],
+        "moodle": [
+            "moodle", "moodle_db", "moodledb", "bitnami_moodle",
+            "lms", "elearning", "campus",
+        ],
+        "django": [
+            "django", "django_db", "djangodb", "app", "webapp",
+            "backend", "api_db", "project",
+        ],
+        "laravel": [
+            "laravel", "laravel_db", "forge", "homestead",
+            "app", "webapp", "backend", "api",
+        ],
+        "rails": [
+            "rails", "rails_db", "app_development", "app_production",
+            "webapp", "backend",
+        ],
+        "phpbb": [
+            "phpbb", "phpbb_db", "phpbb3", "forum", "forum_db",
+            "community", "board",
+        ],
+        "nextcloud": [
+            "nextcloud", "nextcloud_db", "owncloud", "cloud",
+        ],
+        "suitecrm": [
+            "suitecrm", "suitecrm_db", "sugarcrm", "crm", "crm_db",
+        ],
+        "vtiger": [
+            "vtiger", "vtigercrm", "vtiger_db", "crm", "vtigercrm6", "vtigercrm7",
+        ],
+        "dolibarr": [
+            "dolibarr", "dolibarr_db", "dolidb", "erp", "erp_db",
+        ],
+        "glpi": [
+            "glpi", "glpi_db", "glpidb", "itsm", "helpdesk",
+        ],
+        "mantis": [
+            "mantis", "mantisbt", "bugtracker", "mantis_db",
+        ],
+        "mediawiki": [
+            "mediawiki", "wikidb", "wiki", "my_wiki",
+        ],
+        "ghost": [
+            "ghost", "ghost_db", "ghostdb", "blog",
+        ],
+    }
+
+    # Common generic database names (not CMS-specific)
+    COMMON_DATABASE_NAMES = (
+        "information_schema", "mysql", "performance_schema", "sys",
+        "master", "tempdb", "model", "msdb",
+        "postgres", "template0", "template1",
+        "admin", "app", "application", "api",
+        "backend", "cms", "crm", "erp",
+        "blog", "forum", "wiki", "portal",
+        "database", "db", "data", "main",
+        "dev", "development", "staging", "production", "test",
+        "ecommerce", "shop", "store", "marketplace",
+        "hr", "finance", "accounting", "inventory",
+        "security", "auth", "users", "accounts",
+        "webapp", "website", "site", "web",
+        "reports", "analytics", "logs", "audit",
+        "backup", "archive", "legacy", "old",
+    )
+
     # Table -> known columns mapping for CMS/frameworks
     TABLE_COLUMNS = {
         # WordPress
@@ -953,6 +1108,223 @@ class SchemaPredictor(object):
                   "category", "tag", "file", "image", "text", "html"],
     }
 
+    # URL/path column names that trigger URL predictions
+    URL_COLUMN_NAMES = (
+        "url", "link", "href", "uri", "path", "filepath", "file_path",
+        "avatar", "avatar_url", "image", "image_url", "photo", "photo_url",
+        "logo", "icon", "thumbnail", "banner", "cover",
+        "user_url", "site_url", "home_url", "redirect_url",
+        "source_url", "target_url", "callback_url", "return_url",
+        "link_url", "website", "homepage",
+    )
+
+    # Generic URL/path prefixes (always loaded for URL columns)
+    GENERIC_URL_PREFIXES = (
+        "http://", "https://", "ftp://",
+        "/images/", "/img/", "/assets/", "/static/",
+        "/uploads/", "/files/", "/media/",
+        "/css/", "/js/", "/fonts/",
+        "/api/", "/api/v1/", "/api/v2/",
+        "/admin/", "/login/", "/dashboard/",
+    )
+
+    # CMS-specific URL/path prefixes (only loaded when CMS is detected)
+    CMS_URL_PREFIXES = {
+        "wordpress": [
+            "/wp-content/uploads/", "/wp-content/themes/",
+            "/wp-content/plugins/", "/wp-includes/",
+            "/wp-admin/", "/wp-login.php",
+            "/wp-content/uploads/woocommerce_uploads/",
+            "/wp-json/", "/wp-json/wp/v2/",
+            "https://wordpress.org/", "https://woocommerce.com/",
+        ],
+        "joomla": [
+            "/components/", "/modules/", "/plugins/",
+            "/media/", "/templates/", "/administrator/",
+            "/images/", "/cache/", "/tmp/",
+        ],
+        "drupal": [
+            "/sites/default/files/", "/sites/all/",
+            "/core/", "/modules/contrib/", "/themes/",
+            "/node/", "/admin/", "/user/",
+        ],
+        "magento": [
+            "/media/catalog/product/", "/media/catalog/category/",
+            "/skin/frontend/", "/skin/adminhtml/",
+            "/pub/media/", "/pub/static/",
+            "/static/frontend/", "/checkout/",
+        ],
+        "prestashop": [
+            "/img/p/", "/img/c/", "/img/m/",
+            "/modules/", "/themes/", "/upload/",
+            "/download/", "/pdf/",
+        ],
+        "moodle": [
+            "/pluginfile.php/", "/draftfile.php/",
+            "/theme/", "/lib/", "/mod/",
+            "/course/", "/user/",
+        ],
+        "django": [
+            "/static/", "/media/",
+            "/admin/", "/api/",
+        ],
+        "laravel": [
+            "/storage/", "/public/",
+            "/api/", "/admin/",
+        ],
+        "phpbb": [
+            "/images/avatars/", "/images/smilies/",
+            "/styles/", "/ext/",
+        ],
+        "nextcloud": [
+            "/remote.php/dav/", "/remote.php/webdav/",
+            "/ocs/v2.php/", "/index.php/apps/",
+            "/core/img/", "/apps/",
+        ],
+    }
+
+    # Quick schema tables: exact table lists per CMS for --quick-schema mode
+    # These are the tables that exist in a DEFAULT installation
+    QUICK_SCHEMA_TABLES = {
+        "wordpress": [
+            "wp_commentmeta", "wp_comments", "wp_links", "wp_options",
+            "wp_postmeta", "wp_posts", "wp_term_relationships",
+            "wp_term_taxonomy", "wp_termmeta", "wp_terms",
+            "wp_usermeta", "wp_users",
+            # WooCommerce (if installed)
+            "wp_woocommerce_sessions", "wp_woocommerce_api_keys",
+            "wp_woocommerce_attribute_taxonomies",
+            "wp_woocommerce_order_items", "wp_woocommerce_order_itemmeta",
+            "wp_woocommerce_tax_rates", "wp_woocommerce_shipping_zones",
+            "wp_woocommerce_payment_tokens", "wp_woocommerce_log",
+            "wp_wc_product_meta_lookup", "wp_wc_order_stats",
+            "wp_wc_order_product_lookup", "wp_wc_category_lookup",
+            # Yoast SEO
+            "wp_yoast_seo_links", "wp_yoast_seo_meta",
+            "wp_yoast_indexable", "wp_yoast_migrations",
+            # Common plugins
+            "wp_wpforms_entries", "wp_redirection_items",
+            "wp_wfconfig", "wp_wfhits",
+            "wp_gf_form", "wp_gf_entry",
+        ],
+        "joomla": [
+            "jos_users", "jos_session", "jos_content", "jos_categories",
+            "jos_extensions", "jos_menu", "jos_menu_types",
+            "jos_modules", "jos_template_styles", "jos_assets",
+            "jos_usergroups", "jos_user_usergroup_map", "jos_viewlevels",
+            "jos_languages", "jos_tags", "jos_fields",
+            "jos_action_logs", "jos_workflows", "jos_banners",
+            "jos_contact_details", "jos_newsfeeds",
+        ],
+        "drupal": [
+            "node", "node_field_data", "node_revision",
+            "users", "users_field_data", "user_roles",
+            "comment", "comment_field_data",
+            "taxonomy_term_data", "taxonomy_term_field_data", "taxonomy_vocabulary",
+            "file_managed", "file_usage", "menu_link_content_data",
+            "block_content", "path_alias", "key_value",
+            "cache_default", "cache_entity", "cache_config",
+            "cache_data", "cache_render", "cache_page",
+            "watchdog", "sessions", "flood",
+        ],
+        "magento": [
+            "admin_user", "admin_passwords",
+            "customer_entity", "customer_address_entity", "customer_group",
+            "catalog_product_entity", "catalog_category_entity",
+            "catalog_category_product", "eav_attribute", "eav_attribute_set",
+            "sales_order", "sales_order_item", "sales_order_payment",
+            "sales_invoice", "sales_shipment",
+            "quote", "quote_item", "store", "store_website",
+            "cms_page", "cms_block", "core_config_data",
+            "cron_schedule", "newsletter_subscriber",
+            "url_rewrite", "search_query", "wishlist",
+        ],
+        "prestashop": [
+            "ps_customer", "ps_address", "ps_orders", "ps_order_detail",
+            "ps_cart", "ps_product", "ps_product_lang",
+            "ps_category", "ps_category_lang",
+            "ps_manufacturer", "ps_supplier", "ps_currency",
+            "ps_country", "ps_employee", "ps_configuration",
+            "ps_lang", "ps_module", "ps_hook",
+            "ps_image", "ps_stock_available",
+        ],
+        "moodle": [
+            "mdl_user", "mdl_course", "mdl_course_categories",
+            "mdl_course_modules", "mdl_course_sections",
+            "mdl_enrol", "mdl_user_enrolments",
+            "mdl_role", "mdl_role_assignments", "mdl_context",
+            "mdl_grade_items", "mdl_grade_grades",
+            "mdl_assign", "mdl_assign_submission",
+            "mdl_quiz", "mdl_quiz_attempts",
+            "mdl_forum", "mdl_forum_discussions", "mdl_forum_posts",
+            "mdl_config", "mdl_logstore_standard_log",
+            "mdl_sessions", "mdl_modules", "mdl_files",
+            "mdl_groups", "mdl_message", "mdl_notification",
+        ],
+        "django": [
+            "auth_group", "auth_group_permissions", "auth_permission",
+            "auth_user", "auth_user_groups", "auth_user_user_permissions",
+            "django_admin_log", "django_content_type",
+            "django_migrations", "django_session", "django_site",
+        ],
+        "phpbb": [
+            "phpbb_users", "phpbb_groups", "phpbb_forums", "phpbb_topics",
+            "phpbb_posts", "phpbb_config", "phpbb_sessions",
+            "phpbb_acl_groups", "phpbb_acl_options", "phpbb_acl_roles",
+            "phpbb_banlist", "phpbb_bookmarks", "phpbb_drafts",
+            "phpbb_log", "phpbb_privmsgs", "phpbb_styles",
+        ],
+        "vtiger": [
+            "vtiger_users", "vtiger_account", "vtiger_contactdetails",
+            "vtiger_leaddetails", "vtiger_potential", "vtiger_products",
+            "vtiger_invoice", "vtiger_salesorder", "vtiger_quotes",
+            "vtiger_vendor", "vtiger_campaign", "vtiger_troubletickets",
+            "vtiger_crmentity", "vtiger_tab", "vtiger_field",
+            "vtiger_role", "vtiger_currency_info",
+        ],
+        "glpi": [
+            "glpi_users", "glpi_profiles", "glpi_profiles_users",
+            "glpi_entities", "glpi_computers", "glpi_monitors",
+            "glpi_printers", "glpi_softwares", "glpi_tickets",
+            "glpi_ticketfollowups", "glpi_tickettasks",
+            "glpi_groups", "glpi_locations", "glpi_suppliers",
+            "glpi_documents", "glpi_configs", "glpi_logs",
+        ],
+        "mantis": [
+            "mantis_user_table", "mantis_bug_table",
+            "mantis_bugnote_table", "mantis_bugnote_text_table",
+            "mantis_project_table", "mantis_category_table",
+            "mantis_bug_history_table", "mantis_bug_file_table",
+            "mantis_bug_text_table", "mantis_bug_tag_table",
+            "mantis_tag_table", "mantis_custom_field_table",
+            "mantis_config_table", "mantis_tokens_table",
+            "mantis_filters_table",
+        ],
+        "suitecrm": [
+            "accounts", "calls", "campaigns", "cases",
+            "contacts", "documents", "email_addresses",
+            "emails", "leads", "meetings", "notes",
+            "opportunities", "prospects", "tasks", "users",
+            "acl_roles", "bugs", "tracker",
+        ],
+        "dolibarr": [
+            "llx_user", "llx_societe", "llx_socpeople",
+            "llx_commande", "llx_commandedet",
+            "llx_facture", "llx_facturedet",
+            "llx_propal", "llx_product", "llx_product_price",
+            "llx_categorie", "llx_bank_account", "llx_bank",
+            "llx_paiement", "llx_projet", "llx_const",
+            "llx_usergroup",
+        ],
+        "nextcloud": [
+            "oc_users", "oc_groups", "oc_group_user", "oc_accounts",
+            "oc_preferences", "oc_appconfig", "oc_storages",
+            "oc_filecache", "oc_mimetypes", "oc_share",
+            "oc_activity", "oc_comments", "oc_calendars",
+            "oc_addressbooks", "oc_jobs",
+        ],
+    }
+
     # Minimum prefix length to attempt prediction
     MIN_PREFIX_LENGTH = 2
 
@@ -1072,6 +1444,9 @@ class SchemaPredictor(object):
                 for word in self.SPANISH_DB_WORDS:
                     self._trie.insert(env + word, self.WEIGHT_LANGUAGE_DICT)
 
+            # Layer 4g: Common database names
+            self.load_common_db_names()
+
             self._initialized = True
 
             debugMsg = "prediction engine initialized with %d entries" % len(self._trie)
@@ -1145,6 +1520,9 @@ class SchemaPredictor(object):
         if not self._detected_cms:
             self._try_detect_cms(value)
 
+        # Detect dated/sharded table patterns (events_2023_01, partition_0, etc.)
+        self.detect_dated_pattern(value)
+
     def _try_detect_cms(self, table_name):
         """
         Check if a discovered table name matches a CMS fingerprint.
@@ -1157,6 +1535,7 @@ class SchemaPredictor(object):
                 if lower_name == fp.lower():
                     self._detected_cms = cms
                     self._apply_cms_boost(cms)
+                    self._load_db_names_for_cms(cms)
 
                     debugMsg = "CMS detected: %s (fingerprint: %s)" % (cms, table_name)
                     logger.info(debugMsg)
@@ -1260,6 +1639,7 @@ class SchemaPredictor(object):
     def _load_values_for_column(self, column_name):
         """
         Load known value predictions for a column into the trie.
+        Also loads URL/path predictions if column name matches URL patterns.
         """
 
         if column_name in self._value_predictions_loaded:
@@ -1267,7 +1647,7 @@ class SchemaPredictor(object):
 
         self._value_predictions_loaded.add(column_name)
 
-        # Check exact match
+        # Check exact match for standard value predictions
         values = self.COLUMN_VALUE_PREDICTIONS.get(column_name)
 
         # Try lowercase match
@@ -1284,6 +1664,252 @@ class SchemaPredictor(object):
 
             debugMsg = "loaded %d value predictions for column '%s'" % (len(values), column_name)
             logger.debug(debugMsg)
+
+        # URL/path prediction: load if column name looks like a URL field
+        col_lower = column_name.lower()
+        is_url_column = col_lower in [u.lower() for u in self.URL_COLUMN_NAMES]
+
+        # Also check partial matches (e.g., "avatar_url" contains "url")
+        if not is_url_column:
+            for url_col in self.URL_COLUMN_NAMES:
+                if url_col.lower() in col_lower or col_lower in url_col.lower():
+                    is_url_column = True
+                    break
+
+        if is_url_column:
+            loaded = 0
+
+            # Always load generic URL prefixes
+            for prefix in self.GENERIC_URL_PREFIXES:
+                self._trie.insert(prefix, self.WEIGHT_COMMON_OUTPUTS)
+                loaded += 1
+
+            # Load CMS-specific paths ONLY if that CMS is detected
+            if self._detected_cms and self._detected_cms in self.CMS_URL_PREFIXES:
+                for prefix in self.CMS_URL_PREFIXES[self._detected_cms]:
+                    self._trie.insert(prefix, self.WEIGHT_CMS_DETECTED)
+                    loaded += 1
+
+            debugMsg = "loaded %d URL/path predictions for column '%s'%s" % (
+                loaded, column_name,
+                " (CMS: %s)" % self._detected_cms if self._detected_cms else "")
+            logger.debug(debugMsg)
+
+    def detect_cms_from_http(self, headers=None, cookies=None, body=None):
+        """
+        Passive CMS detection from HTTP response headers, cookies, and body content.
+        Called early in the scan before any data extraction begins.
+
+        Args:
+            headers: dict or string of HTTP response headers
+            cookies: string of cookie values
+            body: string of HTTP response body
+        """
+
+        if self._detected_cms:
+            return self._detected_cms
+
+        headers_str = str(headers).lower() if headers else ""
+        cookies_str = str(cookies).lower() if cookies else ""
+        body_str = str(body).lower() if body else ""
+
+        best_cms = None
+        best_score = 0
+
+        for cms, fingerprints in self.HTTP_FINGERPRINTS.items():
+            score = 0
+
+            for pattern in fingerprints.get("headers", []):
+                if pattern.lower() in headers_str:
+                    score += 3  # headers are strong signals
+
+            for pattern in fingerprints.get("cookies", []):
+                if pattern.lower() in cookies_str:
+                    score += 3  # cookies are strong signals
+
+            for pattern in fingerprints.get("body", []):
+                if pattern.lower() in body_str:
+                    score += 1  # body matches are weaker (could be false positives)
+
+            if score > best_score:
+                best_score = score
+                best_cms = cms
+
+        # Require at least 2 points to be confident
+        if best_cms and best_score >= 2:
+            self._detected_cms = best_cms
+
+            if self._initialized:
+                self._apply_cms_boost(best_cms)
+                self._load_db_names_for_cms(best_cms)
+
+            infoMsg = "CMS detected via HTTP fingerprint: %s (confidence: %d)" % (best_cms, best_score)
+            logger.info(infoMsg)
+
+        return self._detected_cms
+
+    def _load_db_names_for_cms(self, cms):
+        """
+        Load common database names for the detected CMS into the trie.
+        """
+
+        db_names = self.CMS_DATABASE_NAMES.get(cms, [])
+        for name in db_names:
+            self._trie.insert(name, self.WEIGHT_CMS_DETECTED)
+
+        debugMsg = "loaded %d database name predictions for CMS '%s'" % (len(db_names), cms)
+        logger.debug(debugMsg)
+
+    def load_common_db_names(self):
+        """
+        Load generic and CMS database names into the trie (called during initialize).
+        """
+
+        for name in self.COMMON_DATABASE_NAMES:
+            self._trie.insert(name, self.WEIGHT_STATIC_DICT)
+
+        # Also load all CMS database names at lower weight
+        # (will be boosted to WEIGHT_CMS_DETECTED when CMS is detected)
+        for cms, names in self.CMS_DATABASE_NAMES.items():
+            for name in names:
+                self._trie.insert(name, self.WEIGHT_LANGUAGE_DICT)
+
+    def detect_dated_pattern(self, value):
+        """
+        Detect dated/sharded table patterns and generate predictions.
+        If we see events_2023_01, generate events_2023_02 through events_2024_12.
+
+        Patterns detected:
+        - base_YYYY_MM (events_2023_01)
+        - base_YYYY (logs_2023)
+        - base_N (partition_0, partition_1)
+
+        >>> p = SchemaPredictor()
+        >>> p.initialize()
+        >>> p.detect_dated_pattern("events_2023_01")
+        >>> candidates = p.predict("events_2023_0", max_results=5)
+        >>> any("events_2023_02" in c[0] for c in candidates)
+        True
+        """
+
+        import re
+
+        # Pattern: base_YYYY_MM
+        match = re.match(r'^(.+?)(\d{4})_(\d{2})$', value)
+        if match:
+            base, year, month = match.group(1), int(match.group(2)), int(match.group(3))
+            generated = 0
+            for y in range(year - 1, year + 3):
+                for m in range(1, 13):
+                    candidate = "%s%d_%02d" % (base, y, m)
+                    if candidate != value:
+                        self._trie.insert(candidate, self.WEIGHT_PATTERN_DERIVED)
+                        generated += 1
+            if generated:
+                debugMsg = "dated pattern detected: %sYYYY_MM, generated %d predictions" % (base, generated)
+                logger.debug(debugMsg)
+            return
+
+        # Pattern: base_YYYY
+        match = re.match(r'^(.+?)(\d{4})$', value)
+        if match:
+            base, year = match.group(1), int(match.group(2))
+            generated = 0
+            for y in range(year - 2, year + 4):
+                candidate = "%s%d" % (base, y)
+                if candidate != value:
+                    self._trie.insert(candidate, self.WEIGHT_PATTERN_DERIVED)
+                    generated += 1
+            if generated:
+                debugMsg = "dated pattern detected: %sYYYY, generated %d predictions" % (base, generated)
+                logger.debug(debugMsg)
+            return
+
+        # Pattern: base_N (partition_0, partition_1, etc.)
+        match = re.match(r'^(.+?)(\d+)$', value)
+        if match:
+            base, num = match.group(1), int(match.group(2))
+            # Only if it looks like a partition/shard (number < 100)
+            if num < 100 and len(match.group(2)) <= 2:
+                generated = 0
+                for n in range(0, max(num + 10, 20)):
+                    candidate = "%s%d" % (base, n)
+                    if candidate != value:
+                        self._trie.insert(candidate, self.WEIGHT_PATTERN_DERIVED)
+                        generated += 1
+                if generated:
+                    debugMsg = "partition pattern detected: %sN, generated %d predictions" % (base, generated)
+                    logger.debug(debugMsg)
+
+    def build_length_combined_query(self, expression, candidate_value):
+        """
+        Build a combined LENGTH + equality query for one-shot verification.
+        Instead of: query1: LENGTH(x)=8, query2: x='wp_users'
+        Does: LENGTH(x)=8 AND x='wp_users' in a single query.
+
+        Returns the combined condition string, or None if not applicable.
+
+        This is used by inference.py to skip the separate LENGTH extraction
+        when we have a high-confidence candidate.
+        """
+
+        if not candidate_value:
+            return None
+
+        return "LENGTH(%s)=%d AND (%s)='%s'" % (
+            expression, len(candidate_value), expression, candidate_value
+        )
+
+    def get_quick_schema_tables(self):
+        """
+        Returns the list of tables to verify via quick schema dump.
+        Only available when CMS is detected. Each table gets verified with
+        a single equality query instead of character-by-character extraction.
+
+        Returns:
+            List of table name strings if CMS is detected, empty list otherwise.
+
+        Usage from sqlmap enumeration:
+            tables = predictor.get_quick_schema_tables()
+            for table in tables:
+                # verify: SELECT COUNT(*) FROM information_schema.tables
+                #         WHERE table_schema='dbname' AND table_name='table'
+                if verify_table_exists(table):
+                    confirmed_tables.append(table)
+        """
+
+        if not self._detected_cms:
+            return []
+
+        tables = self.QUICK_SCHEMA_TABLES.get(self._detected_cms, [])
+
+        if tables:
+            infoMsg = "quick schema: %d candidate tables for CMS '%s' ready for verification" % (
+                len(tables), self._detected_cms)
+            logger.info(infoMsg)
+
+        return list(tables)
+
+    def get_quick_schema_stats(self, verified_count, total_candidates):
+        """
+        Generate stats for quick schema dump.
+        """
+
+        if total_candidates == 0:
+            return None
+
+        hit_rate = 100.0 * verified_count / total_candidates
+        queries_used = total_candidates  # one query per candidate
+        # Normal extraction would have been: verified_count tables * avg 10 chars * 8 queries
+        queries_normal = verified_count * 10 * 8
+
+        lines = []
+        lines.append("quick schema: verified %d/%d tables (%.0f%% hit rate)" % (
+            verified_count, total_candidates, hit_rate))
+        lines.append("quick schema: used %d queries instead of ~%d (saved ~%d queries)" % (
+            queries_used, queries_normal, queries_normal - queries_used))
+
+        return lines
 
     def _analyze_patterns(self, value):
         """

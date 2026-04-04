@@ -436,6 +436,16 @@ def start():
             if not checkConnection(suppressOutput=conf.forms):
                 continue
 
+            # Passive CMS detection from HTTP response (before any injection testing)
+            if kb.get("predictor") and kb.originalPage and not conf.get("noPredict"):
+                try:
+                    _headers = conf.httpHeaders if hasattr(conf, 'httpHeaders') else None
+                    _cookies = conf.cookie or ""
+                    _body = kb.originalPage or ""
+                    kb.predictor.detect_cms_from_http(headers=_headers, cookies=_cookies, body=_body)
+                except Exception:
+                    pass
+
             if conf.rParam and kb.originalPage:
                 kb.randomPool = dict([_ for _ in kb.randomPool.items() if isinstance(_[1], list)])
 
