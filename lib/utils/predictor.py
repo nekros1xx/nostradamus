@@ -3,6 +3,7 @@
 """
 Copyright (c) 2006-2026 sqlmap developers (https://sqlmap.org)
 See the file 'LICENSE' for copying permission
+Modifications made by Sergio Cabrera - https://www.linkedin.com/in/sergio-cabrera-878766239/
 """
 
 import os
