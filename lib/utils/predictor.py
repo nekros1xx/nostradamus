@@ -1118,6 +1118,101 @@ class SchemaPredictor(object):
         "link_url", "website", "homepage",
     )
 
+    # Column names that contain password hashes
+    HASH_COLUMN_NAMES = (
+        "password", "passwd", "pass", "user_pass", "user_password",
+        "password_hash", "pass_hash", "pass_crypted",
+        "user_hash", "pwd", "secret", "credential",
+    )
+
+    # Known hash type prefixes and their fixed structure
+    # Each entry: (prefix, total_fixed_prefix_length, description)
+    # The prefix is what gets inserted into the trie; the length helps skip chars
+    HASH_TYPE_PREFIXES = {
+        # bcrypt ($2a$, $2b$, $2y$ + 2-digit cost + $)
+        "bcrypt": [
+            "$2y$10$", "$2y$12$", "$2y$08$", "$2y$11$", "$2y$13$", "$2y$14$",
+            "$2a$10$", "$2a$12$", "$2a$08$", "$2a$11$",
+            "$2b$10$", "$2b$12$", "$2b$08$",
+        ],
+        # WordPress phpass ($P$B, $P$D + 1 char)
+        "phpass": [
+            "$P$B", "$P$D", "$P$9", "$P$C",
+            "$H$B", "$H$D", "$H$9",
+        ],
+        # Django PBKDF2
+        "django_pbkdf2": [
+            "pbkdf2_sha256$", "pbkdf2_sha1$",
+            "argon2$argon2id$",
+            "bcrypt_sha256$$2b$",
+        ],
+        # MySQL native
+        "mysql_native": [
+            "*",  # MySQL 4.1+ native hash starts with *
+        ],
+        # MD5 ($1$)
+        "md5_crypt": [
+            "$1$",
+        ],
+        # SHA-256 crypt ($5$)
+        "sha256_crypt": [
+            "$5$rounds=",
+            "$5$",
+        ],
+        # SHA-512 crypt ($6$)
+        "sha512_crypt": [
+            "$6$rounds=",
+            "$6$",
+        ],
+        # Argon2
+        "argon2": [
+            "$argon2id$v=19$",
+            "$argon2i$v=19$",
+        ],
+        # Laravel / Symfony (bcrypt wrapped)
+        "laravel": [
+            "$2y$10$", "$2y$12$",
+        ],
+    }
+
+    # CMS-specific hash types (only loaded when CMS is detected)
+    CMS_HASH_TYPES = {
+        "wordpress": ["phpass"],
+        "joomla": ["bcrypt"],
+        "drupal": ["django_pbkdf2", "sha512_crypt"],  # Drupal 8+ uses phpass or argon2
+        "magento": ["sha256_crypt", "bcrypt"],
+        "prestashop": ["md5_crypt", "bcrypt"],
+        "moodle": ["bcrypt", "md5_crypt"],
+        "django": ["django_pbkdf2"],
+        "laravel": ["laravel", "bcrypt"],
+        "phpbb": ["phpass"],
+        "suitecrm": ["md5_crypt"],
+        "vtiger": ["md5_crypt"],
+        "glpi": ["bcrypt"],
+        "mantis": ["bcrypt"],
+        "nextcloud": ["bcrypt", "argon2"],
+    }
+
+    # Column names that contain email addresses
+    EMAIL_COLUMN_NAMES = (
+        "email", "user_email", "email1", "email2", "mail",
+        "email_address", "e_mail", "contact_email",
+        "customer_email", "admin_email", "notification_email",
+        "login_email", "primary_email", "secondary_email",
+    )
+
+    # Common email domains (loaded after @ is detected in partial value)
+    EMAIL_DOMAINS = (
+        "gmail.com", "hotmail.com", "yahoo.com", "outlook.com",
+        "live.com", "icloud.com", "protonmail.com", "mail.com",
+        "aol.com", "zoho.com", "yandex.com", "gmx.com",
+        "hotmail.es", "yahoo.es", "outlook.es",
+        "hotmail.co.uk", "yahoo.co.uk",
+        "gmail.com.br", "hotmail.com.br", "yahoo.com.br",
+        "gmail.com.ar", "hotmail.com.ar", "yahoo.com.ar",
+        "yahoo.com.mx", "hotmail.com.mx",
+    )
+
     # Generic URL/path prefixes (always loaded for URL columns)
     GENERIC_URL_PREFIXES = (
         "http://", "https://", "ftp://",
@@ -1695,6 +1790,53 @@ class SchemaPredictor(object):
                 " (CMS: %s)" % self._detected_cms if self._detected_cms else "")
             logger.debug(debugMsg)
 
+        # Hash type prediction: load if column name looks like a password hash field
+        is_hash_column = col_lower in [h.lower() for h in self.HASH_COLUMN_NAMES]
+        if not is_hash_column:
+            for hash_col in self.HASH_COLUMN_NAMES:
+                if hash_col.lower() in col_lower or col_lower in hash_col.lower():
+                    is_hash_column = True
+                    break
+
+        if is_hash_column:
+            loaded = 0
+
+            # If CMS is detected, load only that CMS's hash types first (highest priority)
+            if self._detected_cms and self._detected_cms in self.CMS_HASH_TYPES:
+                for hash_type in self.CMS_HASH_TYPES[self._detected_cms]:
+                    for prefix in self.HASH_TYPE_PREFIXES.get(hash_type, []):
+                        self._trie.insert(prefix, self.WEIGHT_CMS_DETECTED)
+                        loaded += 1
+            else:
+                # No CMS detected: load all common hash prefixes at lower weight
+                for hash_type in ("bcrypt", "phpass", "md5_crypt", "sha256_crypt", "sha512_crypt", "argon2", "mysql_native"):
+                    for prefix in self.HASH_TYPE_PREFIXES.get(hash_type, []):
+                        self._trie.insert(prefix, self.WEIGHT_COMMON_OUTPUTS)
+                        loaded += 1
+
+            debugMsg = "loaded %d hash prefix predictions for column '%s'%s" % (
+                loaded, column_name,
+                " (CMS: %s)" % self._detected_cms if self._detected_cms else "")
+            logger.debug(debugMsg)
+
+        # Email prediction: load if column name looks like an email field
+        is_email_column = col_lower in [e.lower() for e in self.EMAIL_COLUMN_NAMES]
+        if not is_email_column:
+            for email_col in self.EMAIL_COLUMN_NAMES:
+                if email_col.lower() in col_lower or col_lower in email_col.lower():
+                    is_email_column = True
+                    break
+
+        if is_email_column:
+            # Load email domains as "@domain.com" so they match after the @ is extracted
+            loaded = 0
+            for domain in self.EMAIL_DOMAINS:
+                self._trie.insert("@%s" % domain, self.WEIGHT_COMMON_OUTPUTS)
+                loaded += 1
+
+            debugMsg = "loaded %d email domain predictions for column '%s'" % (loaded, column_name)
+            logger.debug(debugMsg)
+
     def detect_cms_from_http(self, headers=None, cookies=None, body=None):
         """
         Passive CMS detection from HTTP response headers, cookies, and body content.
@@ -2229,7 +2371,10 @@ class SchemaPredictor(object):
 
         candidates = sorted(seen.values(), key=lambda x: -x[1])
 
-        # Filter out the partial value itself
+        # Filter out candidates that are identical to the partial value
+        # (no point predicting what we already have)
+        # But keep same-content candidates if they're a valid short prediction
+        # (e.g., hash prefix "$P$D" when partial is "$P$D" - it's a complete value)
         candidates = [c for c in candidates if c[0].lower() != partial_value.lower()]
 
         return candidates[:max_results]

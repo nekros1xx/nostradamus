@@ -6,29 +6,76 @@ Nostradamus is a fork of [sqlmap](https://github.com/sqlmapproject/sqlmap) enhan
 
 ## How it works
 
-During blind SQL injection (especially time-based), traditional tools extract data character by character using binary search (~8 queries per character). With `--time-sec=10`, each character takes ~42 seconds. A single table name can take 5+ minutes. A full schema can take hours.
+During blind SQL injection (especially time-based), traditional tools extract data character by character using binary search (~8 queries per character). With `--time-sec=10`, each character takes ~42 seconds accounting for HTTP latency, SQL engine processing, and the SLEEP delay. A single table name can take 5+ minutes. A full schema can take hours.
 
 Nostradamus predicts the full value after extracting just 3-4 characters, then verifies with a single equality query. If correct, it skips all remaining characters. If wrong, the cost is minimal (~0.3s for a FALSE response).
+
+### Why not sqlmap's --predict-output?
+
+sqlmap includes a built-in `--predict-output` flag (internally called "Good Samaritan"), but it uses a static dictionary of ~1,300 entries, does not learn from the schema being extracted, is incompatible with `--threads` and `-o`, and has no CMS/framework awareness. In practice almost no one uses it.
 
 ## Features
 
 ### Predictive Schema Inference Engine
-- **34,000+ entries** in optimized Trie data structure for instant prefix lookup
-- **5 prediction layers** with priority weights (learned > pattern > CMS > dictionary > language)
-- **Self-learning** — detects prefixes, separators, case style, and language from extracted values
+- **34,000+ entries** in optimized Trie data structure for O(k) prefix lookup
+- **5 prediction layers** with priority weights (learned > CMS detected > pattern > dictionary > language)
+- **Self-learning** — detects prefixes, separators, case style (lowercase, UPPERCASE, camelCase, PascalCase), and language (EN/ES/PT) from extracted values
 - **Charset hints** — optimizes bisection order even when exact prediction fails (free, no extra queries)
 - **Session persistence** — learned patterns survive between runs via hashDB
+- **Auto-disable** — stops predicting after 20 attempts with less than 5% hit rate
+
+### Quick Schema Dump
+When a CMS is detected and the DBMS is MySQL, Nostradamus verifies all known tables with a single equality query each (`SELECT COUNT(*) FROM information_schema.tables WHERE table_name='candidate'`) instead of extracting character by character. WordPress (35 tables) goes from ~1,400 blind queries to just 35 queries. **97.5% query reduction.** If unknown tables remain, falls back to normal extraction and merges results.
+
+### Pre-Extraction Prediction
+Before starting character-by-character bisection, if the value length is known and CMS is detected, Nostradamus tries to verify the full value with one equality query using quick schema candidates filtered by length. If it hits, the entire extraction is skipped.
 
 ### Automatic CMS Detection
-Nostradamus automatically identifies the target's CMS/framework from the first discovered table and boosts all known tables for that platform to maximum priority. Supported platforms:
+Identifies the target's CMS/framework automatically from the first discovered fingerprint table and boosts all known tables for that platform to maximum priority. Supported platforms:
 
 WordPress, Joomla, Drupal, Magento, PrestaShop, Moodle, Django, Laravel, Rails, phpBB, Nextcloud, SuiteCRM, vTiger, Dolibarr, GLPI, MantisBT, MediaWiki, Ghost
 
+### Passive HTTP Fingerprinting
+Detects the CMS from HTTP response headers, cookies, and body content **before the first table is extracted**. For example, a `wordpress_test_cookie` in cookies or `/wp-content/` in the response body triggers WordPress detection immediately. This maximizes prediction accuracy from the very start of the scan. Supports 13 CMS with header, cookie, and body patterns.
+
 ### Column Context Prediction
-When extracting column names, Nostradamus knows the expected columns for 40+ common tables. If it detects you're extracting columns from `wp_users`, it predicts `user_login`, `user_pass`, `user_email`, `display_name`, etc.
+When extracting column names, Nostradamus knows the expected columns for 40+ common tables across all supported CMS. If it detects you're extracting columns from `wp_users`, it predicts `user_login`, `user_pass`, `user_email`, `display_name`, etc. Works for WordPress, Django, Joomla, Magento, PrestaShop, Moodle, phpBB, vTiger, SuiteCRM, GLPI, MantisBT, Nextcloud, Dolibarr, and generic tables like `users`, `products`, `orders`.
 
 ### Value Prediction
-When extracting data values, Nostradamus predicts common values based on the column name. For a `status` column it predicts `active`, `pending`, `disabled`. For `role` it predicts `admin`, `editor`, `subscriber`. Supports status, role, language, payment method, country, post types, and more.
+When extracting data values, Nostradamus predicts common values based on the column name:
+
+| Column | Predicted values |
+|--------|-----------------|
+| status | active, inactive, pending, disabled, suspended... |
+| post_status | publish, draft, pending, private, trash... |
+| role | admin, editor, author, subscriber, moderator... |
+| lang / language | en, es, fr, en-US, en-GB, es-ES... |
+| payment | credit_card, paypal, bank_transfer... |
+| country | United States, Mexico, Brazil, Argentina... |
+| active / enabled | 0, 1, yes, no, true, false... |
+| type | post, page, user, product, order... |
+
+### CMS-Aware URL/Path Prediction
+For URL-type columns (`url`, `avatar`, `image_url`, `filepath`, etc.), loads CMS-specific path prefixes **only when that CMS is detected**:
+
+- **Always loaded**: `http://`, `https://`, `/uploads/`, `/images/`, `/api/`, `/static/`
+- **WordPress only**: `/wp-content/uploads/`, `/wp-content/themes/`, `/wp-json/`
+- **Moodle only**: `/pluginfile.php/`, `/draftfile.php/`, `/course/`
+- **Magento only**: `/media/catalog/product/`, `/pub/static/`
+- **Joomla only**: `/components/`, `/administrator/`, `/templates/`
+- And more for PrestaShop, Django, Laravel, phpBB, Nextcloud
+
+No cross-CMS false predictions — `/wp-content/` is never suggested for a Moodle target.
+
+### Database Name Prediction
+Predicts database names per CMS (e.g., `wordpress`, `bitnami_wordpress`, `wpdb` for WordPress) plus 50+ generic names (`information_schema`, `mysql`, `production`, `ecommerce`, `app`, etc.). CMS-specific names get boosted to maximum priority when CMS is detected.
+
+### Dated/Sharded Pattern Detection
+Detects table naming patterns with dates or partition numbers:
+
+- `events_2023_01` → generates `events_2023_02` through `events_2025_12`
+- `logs_2023` → generates `logs_2022` through `logs_2027`
+- `partition_0` → generates `partition_1` through `partition_19`
 
 ### 780+ Known Table Definitions
 Pre-loaded schemas for CMS, frameworks, and products with known SQLi CVEs:
@@ -43,14 +90,14 @@ Pre-loaded schemas for CMS, frameworks, and products with known SQLi CVEs:
 | Community | phpBB, Nextcloud, Discourse, Moodle | 85+ |
 
 ### Real-Time Statistics
-At the end of each run, shows hits, misses, measured query timing, and a verdict:
+At the end of each run, shows CMS detection, hits, misses, measured query timing, and a verdict:
 
 ```
 [INFO] predictor CMS detected: wordpress
-[INFO] predictor stats - hits: 29, misses: 77, hit rate: 27%
-[INFO] predictor stats - queries saved: 1442, queries wasted: 77, net: +1365 queries
-[INFO] predictor stats - avg query time: 10.34s (measured), time saved: 868.6s, time wasted: 42.1s
-[INFO] predictor verdict: BENEFICIAL (saved 826.5s = 13.8 min)
+[INFO] predictor stats - hits: 29, misses: 70, hit rate: 29%
+[INFO] predictor stats - queries saved: 1491, queries wasted: 70, net: +1421 queries
+[INFO] predictor stats - avg query time: 1.51s (measured), time saved: 2235.0s, time wasted: 0.4s
+[INFO] predictor verdict: BENEFICIAL (saved 2234.5s = 37.2 min)
 ```
 
 ### Safety Guards
@@ -161,25 +208,28 @@ nostradamus -u "http://target.com/page?id=1" --tor --tor-type=SOCKS5 --batch --d
 
 ## Benchmark Results
 
-Tested against 26 databases with diverse naming patterns:
+Tested against 26 databases with diverse naming patterns (boolean-based blind):
 
 | Database | Pattern | Hit Rate | Net Queries Saved |
 |----------|---------|----------|-------------------|
-| WordPress Full | wp_ + plugins | 27% | +1,365 |
+| WordPress Full | wp_ + plugins | 29% | +1,421 |
+| Moodle | mdl_ | 38% | +1,290 |
 | MantisBT | mantis_*_table | 41% | +1,255 |
-| Magento | catalog/sales/eav | 36% | +1,160 |
-| Drupal | cache/node/taxonomy | 39% | +1,127 |
+| Magento | catalog/sales/eav | 37% | +1,196 |
+| Drupal | cache/node/taxonomy | 41% | +1,165 |
 | vTiger CRM | vtiger_ | 37% | +1,100 |
-| Moodle | mdl_ | 32% | +1,064 |
-| Django | auth_/django_ | 43% | +883 |
-| SuiteCRM | accounts/contacts | 37% | +815 |
-| PrestaShop | ps_ | 31% | +779 |
-| Joomla | jos_ | 24% | +678 |
-| GLPI | glpi_ | 30% | +611 |
+| Joomla | jos_ | 32% | +1,029 |
+| GLPI | glpi_ | 39% | +1,020 |
+| PrestaShop | ps_ | 37% | +926 |
+| Django | auth_/django_ | 43% | +890 |
+| SuiteCRM | accounts/contacts | 40% | +889 |
+| Dolibarr | llx_ | 36% | +574 |
+| phpBB | phpbb_ | 44% | +573 |
 | Rails | active_storage | 29% | +529 |
-| phpBB | phpbb_ | 37% | +498 |
-| Dolibarr | llx_ | 29% | +460 |
-| Nextcloud | oc_ | 25% | +274 |
+| Nextcloud | oc_ | 33% | +516 |
+| Hungarian | tbl* | 22% | +206 |
+
+**Time-based blind (--time-sec=5) with WordPress Full: saved 2,234.5 seconds = 37.2 minutes in a single scan.**
 
 With `--time-sec=10`, each saved query = 10 seconds. For MantisBT (+1,255 queries): **~3.5 hours saved**.
 
