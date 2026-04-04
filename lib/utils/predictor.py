@@ -743,10 +743,214 @@ class SchemaPredictor(object):
 
     # Weight constants for prediction sources
     WEIGHT_SCHEMA_LEARNING = 100  # highest priority - from current session
+    WEIGHT_CMS_DETECTED = 90     # CMS detected via fingerprint - very high confidence
     WEIGHT_PATTERN_DERIVED = 80   # derived from naming patterns
+    WEIGHT_COLUMN_CONTEXT = 75    # column predicted from known table context
     WEIGHT_COMMON_OUTPUTS = 60    # from common-outputs.txt
     WEIGHT_STATIC_DICT = 40       # from common-tables/columns.txt
+    WEIGHT_VALUE_PREDICT = 35     # predicted data values (status, email domains, etc.)
     WEIGHT_LANGUAGE_DICT = 20     # from language dictionaries
+
+    # CMS fingerprint tables: if ANY of these exist, we know the CMS
+    CMS_FINGERPRINTS = {
+        "wordpress": ["wp_options", "wp_posts", "wp_users"],
+        "joomla": ["jos_extensions", "jos_users", "jos_content"],
+        "drupal": ["node", "node_field_data", "watchdog"],
+        "magento": ["catalog_product_entity", "eav_attribute", "core_config_data"],
+        "prestashop": ["ps_configuration", "ps_customer", "ps_orders"],
+        "moodle": ["mdl_config", "mdl_user", "mdl_course"],
+        "django": ["django_migrations", "auth_user", "django_content_type"],
+        "laravel": ["migrations", "failed_jobs", "personal_access_tokens"],
+        "rails": ["schema_migrations", "ar_internal_metadata", "active_storage_blobs"],
+        "phpbb": ["phpbb_users", "phpbb_config", "phpbb_forums"],
+        "nextcloud": ["oc_users", "oc_appconfig", "oc_filecache"],
+        "suitecrm": ["accounts", "contacts", "email_addr_bean_rel"],
+        "vtiger": ["vtiger_users", "vtiger_crmentity", "vtiger_tab"],
+        "dolibarr": ["llx_user", "llx_societe", "llx_const"],
+        "glpi": ["glpi_users", "glpi_tickets", "glpi_computers"],
+        "mantis": ["mantis_user_table", "mantis_bug_table", "mantis_project_table"],
+        "mediawiki": ["page", "revision", "interwiki"],
+        "ghost": ["posts", "posts_tags", "roles_users"],
+    }
+
+    # Table -> known columns mapping for CMS/frameworks
+    TABLE_COLUMNS = {
+        # WordPress
+        "wp_users": ["ID", "user_login", "user_pass", "user_nicename", "user_email",
+                      "user_url", "user_registered", "user_activation_key",
+                      "user_status", "display_name"],
+        "wp_posts": ["ID", "post_author", "post_date", "post_content", "post_title",
+                      "post_excerpt", "post_status", "comment_status", "ping_status",
+                      "post_password", "post_name", "post_modified", "post_type",
+                      "post_mime_type", "comment_count"],
+        "wp_options": ["option_id", "option_name", "option_value", "autoload"],
+        "wp_comments": ["comment_ID", "comment_post_ID", "comment_author",
+                         "comment_author_email", "comment_author_url",
+                         "comment_date", "comment_content", "comment_approved"],
+        "wp_usermeta": ["umeta_id", "user_id", "meta_key", "meta_value"],
+        "wp_postmeta": ["meta_id", "post_id", "meta_key", "meta_value"],
+        "wp_terms": ["term_id", "name", "slug", "term_group"],
+        "wp_term_taxonomy": ["term_taxonomy_id", "term_id", "taxonomy", "description", "parent", "count"],
+        # Django
+        "auth_user": ["id", "password", "last_login", "is_superuser", "username",
+                       "first_name", "last_name", "email", "is_staff", "is_active",
+                       "date_joined"],
+        "auth_group": ["id", "name"],
+        "auth_permission": ["id", "name", "content_type_id", "codename"],
+        "django_content_type": ["id", "app_label", "model"],
+        "django_migrations": ["id", "app", "name", "applied"],
+        "django_session": ["session_key", "session_data", "expire_date"],
+        # Joomla
+        "jos_users": ["id", "name", "username", "email", "password", "block",
+                       "sendEmail", "registerDate", "lastvisitDate", "activation",
+                       "params", "lastResetTime", "resetCount", "otpKey", "otep", "requireReset"],
+        "jos_content": ["id", "title", "alias", "introtext", "fulltext",
+                         "state", "catid", "created", "created_by", "modified",
+                         "publish_up", "publish_down", "hits", "language"],
+        "jos_extensions": ["extension_id", "name", "type", "element", "folder",
+                            "client_id", "enabled", "access", "protected", "manifest_cache"],
+        # Magento
+        "admin_user": ["user_id", "firstname", "lastname", "email", "username",
+                        "password", "created", "modified", "logdate", "lognum",
+                        "reload_acl_flag", "is_active", "extra", "rp_token"],
+        "customer_entity": ["entity_id", "website_id", "email", "group_id",
+                             "store_id", "created_at", "updated_at", "is_active",
+                             "disable_auto_group_change", "firstname", "lastname",
+                             "password_hash", "rp_token", "default_billing", "default_shipping"],
+        "sales_order": ["entity_id", "state", "status", "customer_id", "customer_email",
+                         "customer_firstname", "customer_lastname", "grand_total",
+                         "total_paid", "total_qty_ordered", "store_id", "created_at"],
+        "catalog_product_entity": ["entity_id", "attribute_set_id", "type_id", "sku",
+                                    "has_options", "required_options", "created_at", "updated_at"],
+        # PrestaShop
+        "ps_customer": ["id_customer", "id_shop", "id_gender", "id_default_group",
+                         "firstname", "lastname", "email", "passwd", "birthday",
+                         "newsletter", "ip_registration_newsletter", "optin",
+                         "active", "date_add", "date_upd"],
+        "ps_orders": ["id_order", "id_customer", "id_cart", "id_currency",
+                       "id_carrier", "current_state", "payment", "total_paid",
+                       "total_products", "date_add", "date_upd"],
+        "ps_product": ["id_product", "id_supplier", "id_manufacturer", "id_category_default",
+                        "id_tax_rules_group", "reference", "ean13", "price",
+                        "wholesale_price", "quantity", "active", "date_add"],
+        # Moodle
+        "mdl_user": ["id", "username", "password", "firstname", "lastname",
+                      "email", "city", "country", "lang", "timezone",
+                      "firstaccess", "lastaccess", "lastlogin", "currentlogin",
+                      "confirmed", "suspended", "deleted"],
+        "mdl_course": ["id", "category", "sortorder", "fullname", "shortname",
+                        "idnumber", "summary", "format", "startdate", "enddate",
+                        "visible", "timecreated", "timemodified"],
+        # phpBB
+        "phpbb_users": ["user_id", "user_type", "group_id", "username",
+                          "username_clean", "user_password", "user_email",
+                          "user_birthday", "user_lastvisit", "user_posts",
+                          "user_lang", "user_timezone", "user_avatar", "user_sig",
+                          "user_regdate", "user_ip"],
+        # vTiger
+        "vtiger_users": ["id", "user_name", "user_password", "user_hash",
+                          "first_name", "last_name", "email1", "email2",
+                          "status", "is_admin", "currency_id", "date_format"],
+        # SuiteCRM
+        "users": ["id", "user_name", "user_hash", "system_generated_password",
+                   "first_name", "last_name", "email1", "email2",
+                   "status", "is_admin", "employee_status", "title",
+                   "department", "phone_work", "phone_mobile"],
+        "contacts": ["id", "first_name", "last_name", "email1", "phone_work",
+                      "phone_mobile", "title", "department", "account_id",
+                      "primary_address_street", "primary_address_city",
+                      "primary_address_state", "primary_address_country"],
+        # GLPI
+        "glpi_users": ["id", "name", "password", "realname", "firstname",
+                        "phone", "email", "is_active", "profiles_id",
+                        "date_creation", "date_mod"],
+        "glpi_tickets": ["id", "name", "date", "closedate", "solvedate",
+                          "status", "users_id_recipient", "requesttypes_id",
+                          "content", "urgency", "impact", "priority", "type"],
+        # MantisBT
+        "mantis_user_table": ["id", "username", "password", "email",
+                                "realname", "access_level", "enabled",
+                                "login_count", "last_visit", "date_created"],
+        "mantis_bug_table": ["id", "project_id", "reporter_id", "handler_id",
+                               "priority", "severity", "status", "resolution",
+                               "summary", "description", "date_submitted", "last_updated"],
+        # Nextcloud
+        "oc_users": ["uid", "displayname", "password", "uid_lower"],
+        # Dolibarr
+        "llx_user": ["rowid", "login", "pass_crypted", "lastname", "firstname",
+                      "email", "admin", "statut", "entity", "datec"],
+        # Generic common tables
+        "users": ["id", "username", "password", "email", "name", "role",
+                   "status", "created_at", "updated_at", "last_login"],
+        "accounts": ["id", "name", "email", "phone", "address", "city",
+                      "state", "country", "status", "created_at"],
+        "products": ["id", "name", "description", "price", "sku", "stock",
+                      "category_id", "status", "created_at"],
+        "orders": ["id", "user_id", "total", "status", "created_at", "updated_at"],
+        "sessions": ["id", "user_id", "token", "ip_address", "expires_at"],
+        "categories": ["id", "name", "description", "parent_id", "sort_order"],
+        "comments": ["id", "post_id", "user_id", "body", "created_at"],
+        "posts": ["id", "title", "body", "author_id", "status", "created_at"],
+        "tags": ["id", "name", "slug"],
+        "roles": ["id", "name", "description"],
+        "permissions": ["id", "name", "description", "role_id"],
+        "settings": ["id", "key", "value", "type"],
+        "logs": ["id", "user_id", "action", "message", "ip_address", "created_at"],
+        "notifications": ["id", "user_id", "type", "message", "read", "created_at"],
+        "files": ["id", "name", "path", "size", "mime_type", "user_id", "created_at"],
+        "migrations": ["id", "migration", "batch"],
+    }
+
+    # Common values for specific column types
+    COLUMN_VALUE_PREDICTIONS = {
+        # Status fields
+        "status": ["active", "inactive", "pending", "deleted", "suspended",
+                    "enabled", "disabled", "approved", "rejected", "draft",
+                    "published", "archived", "cancelled", "completed", "processing",
+                    "shipped", "delivered", "refunded", "failed", "expired"],
+        "state": ["active", "inactive", "pending", "open", "closed",
+                   "new", "in_progress", "resolved", "on_hold"],
+        "post_status": ["publish", "draft", "pending", "private", "trash",
+                         "auto-draft", "inherit", "future"],
+        "comment_status": ["open", "closed"],
+        "post_type": ["post", "page", "attachment", "revision", "nav_menu_item",
+                       "custom_css", "customize_changeset", "product", "shop_order"],
+        # Role fields
+        "role": ["admin", "administrator", "editor", "author", "contributor",
+                  "subscriber", "moderator", "manager", "user", "guest",
+                  "superadmin", "operator", "viewer"],
+        "user_type": ["admin", "user", "moderator", "guest"],
+        "is_admin": ["0", "1", "yes", "no", "true", "false", "on"],
+        "is_active": ["0", "1", "yes", "no", "true", "false"],
+        # Language/locale
+        "lang": ["en", "es", "fr", "de", "pt", "it", "nl", "ru", "zh", "ja",
+                  "ko", "ar", "en-US", "en-GB", "es-ES", "fr-FR", "de-DE", "pt-BR"],
+        "language": ["en-GB", "en-US", "es-ES", "fr-FR", "de-DE", "pt-BR",
+                      "it-IT", "nl-NL", "ru-RU", "zh-CN", "ja-JP"],
+        # Payment
+        "payment": ["credit_card", "paypal", "bank_transfer", "cash",
+                      "stripe", "check", "wire_transfer", "bitcoin"],
+        "method": ["GET", "POST", "PUT", "DELETE", "PATCH", "credit_card", "paypal"],
+        # Currency
+        "currency_cd": ["USD", "EUR", "GBP", "MXN", "BRL", "ARS", "CLP",
+                         "COP", "PEN", "UYU", "CAD", "AUD", "JPY", "CNY"],
+        "iso_code": ["USD", "EUR", "GBP", "MXN", "BRL", "ARS"],
+        # Country
+        "country": ["United States", "Mexico", "Brazil", "Argentina", "Colombia",
+                      "Spain", "United Kingdom", "France", "Germany", "Canada",
+                      "Chile", "Peru", "Uruguay", "Italy", "Portugal"],
+        # Email domains (for predicting after @)
+        "_email_domain": ["gmail.com", "hotmail.com", "yahoo.com", "outlook.com",
+                           "live.com", "mail.com", "protonmail.com", "icloud.com"],
+        # Boolean-like
+        "active": ["0", "1", "Y", "N", "yes", "no", "true", "false"],
+        "enabled": ["0", "1", "Y", "N", "yes", "no"],
+        "autoload": ["yes", "no"],
+        "deleted": ["0", "1"],
+        # Type fields
+        "type": ["post", "page", "user", "comment", "product", "order",
+                  "category", "tag", "file", "image", "text", "html"],
+    }
 
     # Minimum prefix length to attempt prediction
     MIN_PREFIX_LENGTH = 2
@@ -767,6 +971,18 @@ class SchemaPredictor(object):
         self._lang_scores = {"en": 0, "es": 0}
         self._initialized = False
         self._lock = threading.Lock()
+
+        # CMS detection
+        self._detected_cms = None         # detected CMS name or None
+        self._cms_boost_applied = False   # whether we already boosted CMS tables
+
+        # Column context: tracks which table we're currently extracting columns for
+        self._current_table_context = None
+        self._column_predictions_loaded = set()  # tables for which we already loaded columns
+
+        # Value context: tracks which column we're currently extracting values for
+        self._current_column_context = None
+        self._value_predictions_loaded = set()
 
         # Request/time tracking for cost analysis
         self.stats_hits = 0             # successful predictions
@@ -892,7 +1108,7 @@ class SchemaPredictor(object):
     def learn(self, value, context=None):
         """
         Learn from a discovered value (table name, column name, db name, etc).
-        Updates the trie, pattern analysis, and language detection.
+        Updates the trie, pattern analysis, language detection, and CMS detection.
 
         Args:
             value: the discovered string
@@ -923,6 +1139,150 @@ class SchemaPredictor(object):
 
         # Generate pattern-derived predictions
         self._generate_pattern_predictions(value)
+
+        # CMS auto-detection: check if this value is a fingerprint table
+        if not self._detected_cms:
+            self._try_detect_cms(value)
+
+    def _try_detect_cms(self, table_name):
+        """
+        Check if a discovered table name matches a CMS fingerprint.
+        If detected, boost all tables from that CMS to high weight.
+        """
+
+        lower_name = table_name.lower()
+        for cms, fingerprints in self.CMS_FINGERPRINTS.items():
+            for fp in fingerprints:
+                if lower_name == fp.lower():
+                    self._detected_cms = cms
+                    self._apply_cms_boost(cms)
+
+                    debugMsg = "CMS detected: %s (fingerprint: %s)" % (cms, table_name)
+                    logger.info(debugMsg)
+                    return
+
+    def _apply_cms_boost(self, cms):
+        """
+        Boost all known tables for the detected CMS to WEIGHT_CMS_DETECTED.
+        Also load column predictions for all known tables of this CMS.
+        """
+
+        if self._cms_boost_applied:
+            return
+
+        self._cms_boost_applied = True
+
+        # Find all framework tables that belong to this CMS by prefix pattern
+        cms_prefixes = {
+            "wordpress": "wp_", "joomla": "jos_", "drupal": None,
+            "magento": None, "prestashop": "ps_", "moodle": "mdl_",
+            "django": ("auth_", "django_"), "laravel": None,
+            "rails": "active_storage_", "phpbb": "phpbb_",
+            "nextcloud": "oc_", "suitecrm": None, "vtiger": "vtiger_",
+            "dolibarr": "llx_", "glpi": "glpi_", "mantis": "mantis_",
+            "mediawiki": None, "ghost": None,
+        }
+
+        prefix = cms_prefixes.get(cms)
+        boosted = 0
+
+        for table in self.FRAMEWORK_TABLES:
+            is_match = False
+            if prefix is None:
+                # For CMS without unique prefix, boost all framework tables
+                # that are in the CMS_FINGERPRINTS list
+                if table.lower() in [fp.lower() for fp in self.CMS_FINGERPRINTS.get(cms, [])]:
+                    is_match = True
+            elif isinstance(prefix, tuple):
+                is_match = any(table.lower().startswith(p) for p in prefix)
+            else:
+                is_match = table.lower().startswith(prefix)
+
+            if is_match:
+                self._trie.insert(table, self.WEIGHT_CMS_DETECTED)
+                boosted += 1
+
+                # Also load column predictions for this table
+                self._load_columns_for_table(table)
+
+        debugMsg = "boosted %d tables for CMS '%s' to weight %d" % (boosted, cms, self.WEIGHT_CMS_DETECTED)
+        logger.debug(debugMsg)
+
+    def set_table_context(self, table_name):
+        """
+        Set the current table context for column prediction.
+        Called from inference.py when extracting columns for a specific table.
+        """
+
+        if table_name and table_name != self._current_table_context:
+            self._current_table_context = table_name
+            self._load_columns_for_table(table_name)
+
+    def _load_columns_for_table(self, table_name):
+        """
+        Load known column names for a table into the trie.
+        """
+
+        if table_name in self._column_predictions_loaded:
+            return
+
+        self._column_predictions_loaded.add(table_name)
+
+        # Check exact match first
+        columns = self.TABLE_COLUMNS.get(table_name)
+
+        # Try lowercase match
+        if not columns:
+            for tbl, cols in self.TABLE_COLUMNS.items():
+                if tbl.lower() == table_name.lower():
+                    columns = cols
+                    break
+
+        if columns:
+            weight = self.WEIGHT_CMS_DETECTED if self._detected_cms else self.WEIGHT_COLUMN_CONTEXT
+            for col in columns:
+                self._trie.insert(col, weight)
+
+            debugMsg = "loaded %d column predictions for table '%s'" % (len(columns), table_name)
+            logger.debug(debugMsg)
+
+    def set_column_context(self, column_name):
+        """
+        Set the current column context for value prediction.
+        Called from inference.py when extracting data values.
+        """
+
+        if column_name and column_name != self._current_column_context:
+            self._current_column_context = column_name
+            self._load_values_for_column(column_name)
+
+    def _load_values_for_column(self, column_name):
+        """
+        Load known value predictions for a column into the trie.
+        """
+
+        if column_name in self._value_predictions_loaded:
+            return
+
+        self._value_predictions_loaded.add(column_name)
+
+        # Check exact match
+        values = self.COLUMN_VALUE_PREDICTIONS.get(column_name)
+
+        # Try lowercase match
+        if not values:
+            for col, vals in self.COLUMN_VALUE_PREDICTIONS.items():
+                if col.lower() == column_name.lower():
+                    values = vals
+                    break
+
+        if values:
+            # Use COMMON_OUTPUTS weight (60) so contextual values beat generic dict entries (40)
+            for val in values:
+                self._trie.insert(val, self.WEIGHT_COMMON_OUTPUTS)
+
+            debugMsg = "loaded %d value predictions for column '%s'" % (len(values), column_name)
+            logger.debug(debugMsg)
 
     def _analyze_patterns(self, value):
         """
@@ -1360,6 +1720,8 @@ class SchemaPredictor(object):
         net_time = self.stats_time_saved - self.stats_time_wasted
 
         lines = []
+        if self._detected_cms:
+            lines.append("predictor CMS detected: %s" % self._detected_cms)
         lines.append("predictor stats - hits: %d, misses: %d, hit rate: %.0f%%" % (
             self.stats_hits, self.stats_misses, hit_rate))
         lines.append("predictor stats - queries saved: %d, queries wasted: %d, net: %+d queries" % (

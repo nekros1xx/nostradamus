@@ -121,7 +121,7 @@ At the end of each run, Nostradamus shows prediction statistics with real measur
 
 ## Credits
 
-Built on top of [sqlmap](https://github.com/sqlmapproject/sqlmap) by the sqlmap developers. The prediction engine and CMS/framework table definitions are original work of [Sergio Cabrera](https://www.linkedin.com/in/sergio-cabrera-878766239/).
+Built on top of [sqlmap](https://github.com/sqlmapproject/sqlmap) by the sqlmap developers. The prediction engine and CMS/framework table definitions are original work of [Sergio Cabrera](https://www.linkedin.com/in/sergio-cabrera-878766239/)
 
 ## License
 
