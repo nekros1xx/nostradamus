@@ -1,4 +1,4 @@
-# Nostradamus
+# 🔮 Nostradamus
 
 **SQL injection exploitation tool with predictive schema inference engine**
 
@@ -54,6 +54,27 @@ When extracting data values, Nostradamus predicts common values based on the col
 | country | United States, Mexico, Brazil, Argentina... |
 | active / enabled | 0, 1, yes, no, true, false... |
 | type | post, page, user, product, order... |
+
+### Hash Type Prediction
+When extracting password hash columns (`password`, `user_pass`, `pass_hash`, etc.), Nostradamus predicts the hash prefix based on the detected CMS:
+
+| CMS | Hash type | Predicted prefix |
+|-----|-----------|-----------------|
+| WordPress / phpBB | phpass | `$P$B`, `$P$D`, `$H$B` |
+| Joomla / GLPI / MantisBT | bcrypt | `$2y$10$`, `$2y$12$` |
+| Django | PBKDF2 | `pbkdf2_sha256$`, `argon2$argon2id$` |
+| Magento | SHA-256 / bcrypt | `$5$`, `$2y$10$` |
+| Laravel | bcrypt | `$2y$10$`, `$2y$12$` |
+| Nextcloud | Argon2 / bcrypt | `$argon2id$v=19$`, `$2y$10$` |
+
+Without CMS detection, loads all common hash prefixes: bcrypt, phpass, MD5 crypt, SHA-256, SHA-512, Argon2, MySQL native. A bcrypt hash prefix (`$2y$10$`) saves 7 characters × 8 queries = **56 queries** per hash.
+
+### Email Domain Prediction
+When extracting email columns (`email`, `user_email`, `email1`, `contact_email`, etc.), Nostradamus predicts the domain after the `@` is extracted:
+
+`@gmail.com`, `@hotmail.com`, `@yahoo.com`, `@outlook.com`, `@icloud.com`, `@protonmail.com` plus regional variants (`@hotmail.es`, `@gmail.com.br`, `@yahoo.com.ar`, `@yahoo.com.mx`, etc.)
+
+Predicting `@gmail.com` saves 10 characters × 8 queries = **80 queries** per email address.
 
 ### CMS-Aware URL/Path Prediction
 For URL-type columns (`url`, `avatar`, `image_url`, `filepath`, etc.), loads CMS-specific path prefixes **only when that CMS is detected**:
