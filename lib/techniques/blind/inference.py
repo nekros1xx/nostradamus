@@ -785,7 +785,9 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                                     if showEta:
                                         progress.progress(len(bestCandidate))
                                     elif conf.verbose in (1, 2) or conf.api:
-                                        dataToStdout(filterControlChars(bestCandidate[index - 1:]))
+                                        # Show the full predicted value on a clean line
+                                        dataToStdout("\r[%s] [INFO] retrieved: %s" % (time.strftime("%X"), filterControlChars(bestCandidate)))
+                                        dataToStdout("\n")
 
                                     # Use candidate value but preserve the case from extracted chars
                                     # e.g., if partialValue="user" and candidate="USERS",

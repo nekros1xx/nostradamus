@@ -570,6 +570,10 @@ class Databases(object):
                         else:
                             query = _query % (unsafeSQLIdentificatorNaming(db), index)
 
+                        # ─── Nostradamus: Skip extraction if we already have all tables ───
+                        if _quickSchemaSwitched and len(tables) >= int(count):
+                            break
+
                         table = unArrayizeValue(inject.getValue(query, union=False, error=False))
 
                         if not isNoneValue(table):
@@ -578,6 +582,16 @@ class Databases(object):
                             # Avoid duplicates if quick schema already found this table
                             if table.lower().strip('`') not in set(t.lower().strip('`') for t in tables):
                                 tables.append(table)
+                                # ─── Nostradamus: Log new table found via blind ───
+                                if _quickSchemaSwitched:
+                                    infoMsg = "blind extraction: found new table '%s' (not in quick schema)" % table
+                                    logger.info(infoMsg)
+
+                        # ─── Nostradamus: Break early if all tables found after this extraction ───
+                        if _quickSchemaSwitched and len(tables) >= int(count):
+                            infoMsg = "all %d tables found, stopping extraction" % len(tables)
+                            logger.info(infoMsg)
+                            break
 
                     if tables:
                         kb.data.cachedTables[db] = tables
