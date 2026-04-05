@@ -394,10 +394,12 @@ class Databases(object):
                                 confirmedTables.append(safeSQLIdentificatorNaming(candidateTable, True))
                                 # Teach predictor about this table
                                 kb.predictor.learn(candidateTable)
+                                kb.predictor.stats_quick_tables_confirmed += 1
 
                                 infoMsg = "quick schema: '%s' exists" % candidateTable
                                 logger.info(infoMsg)
                             else:
+                                kb.predictor.stats_quick_tables_missed += 1
                                 debugMsg = "quick schema: '%s' not found" % candidateTable
                                 logger.debug(debugMsg)
 
@@ -533,11 +535,13 @@ class Databases(object):
                                                 alreadyFound.add(tblName.lower().strip('`'))
                                                 quickHits += 1
                                                 kb.predictor.learn(candidateTable)
+                                                kb.predictor.stats_quick_tables_confirmed += 1
 
                                             infoMsg = "quick schema: '%s' exists" % candidateTable
                                             logger.info(infoMsg)
                                         else:
                                             quickMisses += 1
+                                            kb.predictor.stats_quick_tables_missed += 1
                                             debugMsg = "quick schema: '%s' not found" % candidateTable
                                             logger.debug(debugMsg)
 
@@ -1081,9 +1085,11 @@ class Databases(object):
                                 colName = safeSQLIdentificatorNaming(candidateCol)
                                 if colName not in columns:
                                     columns[colName] = None
+                                    kb.predictor.stats_quick_columns_confirmed += 1
                                 infoMsg = "quick columns: '%s' exists" % candidateCol
                                 logger.info(infoMsg)
                             else:
+                                kb.predictor.stats_quick_columns_missed += 1
                                 debugMsg = "quick columns: '%s' not found" % candidateCol
                                 logger.debug(debugMsg)
 

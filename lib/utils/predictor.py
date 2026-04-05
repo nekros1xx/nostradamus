@@ -1548,6 +1548,12 @@ class SchemaPredictor(object):
         self.stats_avg_query_time = 0.0 # running average of real query duration
         self._query_times = []          # recent query durations for averaging
 
+        # Quick schema stats (separate from bisection predictor stats)
+        self.stats_quick_tables_confirmed = 0   # tables found via existence queries
+        self.stats_quick_tables_missed = 0       # tables checked but not found
+        self.stats_quick_columns_confirmed = 0   # columns found via existence queries
+        self.stats_quick_columns_missed = 0      # columns checked but not found
+
     def initialize(self):
         """
         Load static dictionaries into the trie.
@@ -2699,15 +2705,15 @@ class SchemaPredictor(object):
     def get_efficiency_report(self):
         """
         Returns a human-readable efficiency report string.
+        Includes both bisection predictor stats and quick schema stats.
         Uses real timing data when available, falls back to estimates.
         """
 
         total_attempts = self.stats_hits + self.stats_misses
-        if total_attempts == 0:
-            return None
+        has_quick_schema = (self.stats_quick_tables_confirmed + self.stats_quick_columns_confirmed) > 0
 
-        net_queries = self.stats_queries_saved - self.stats_queries_wasted
-        hit_rate = (100.0 * self.stats_hits / total_attempts) if total_attempts > 0 else 0
+        if total_attempts == 0 and not has_quick_schema:
+            return None
 
         # Determine timing source
         if self.stats_avg_query_time > 0:
@@ -2717,24 +2723,69 @@ class SchemaPredictor(object):
             timing_source = "estimated"
             avg_q_time = conf.get("timeSec") or 5
 
-        net_time = self.stats_time_saved - self.stats_time_wasted
-
         lines = []
         if self._detected_cms:
             lines.append("predictor CMS detected: %s" % self._detected_cms)
-        lines.append("predictor stats - hits: %d, misses: %d, hit rate: %.0f%%" % (
-            self.stats_hits, self.stats_misses, hit_rate))
-        lines.append("predictor stats - queries saved: %d, queries wasted: %d, net: %+d queries" % (
-            self.stats_queries_saved, self.stats_queries_wasted, net_queries))
-        lines.append("predictor stats - avg query time: %.2fs (%s), time saved: %.1fs, time wasted: %.1fs" % (
-            avg_q_time, timing_source, self.stats_time_saved, self.stats_time_wasted))
 
-        if net_time > 0:
-            lines.append("predictor verdict: BENEFICIAL (saved %.1fs = %.1f min)" % (net_time, net_time / 60.0))
-        elif net_time < 0:
-            lines.append("predictor verdict: DETRIMENTAL (wasted %.1fs = %.1f min, consider --no-predict)" % (abs(net_time), abs(net_time) / 60.0))
+        # ─── Quick Schema Stats ───
+        if has_quick_schema:
+            # Each table confirmed by quick schema saves ~12 chars * 8 queries = 96 queries
+            # Each column confirmed saves ~8 chars * 8 queries = 64 queries
+            # Each quick check costs 1 query (existence check)
+            avg_table_len = 12  # average table name length
+            avg_col_len = 8     # average column name length
+            queries_per_char = 8  # bisection queries per char
+
+            quick_table_queries_saved = self.stats_quick_tables_confirmed * avg_table_len * queries_per_char
+            quick_table_queries_cost = self.stats_quick_tables_confirmed + self.stats_quick_tables_missed
+            quick_col_queries_saved = self.stats_quick_columns_confirmed * avg_col_len * queries_per_char
+            quick_col_queries_cost = self.stats_quick_columns_confirmed + self.stats_quick_columns_missed
+
+            total_quick_saved = quick_table_queries_saved + quick_col_queries_saved
+            total_quick_cost = quick_table_queries_cost + quick_col_queries_cost
+            net_quick = total_quick_saved - total_quick_cost
+
+            quick_time_saved = total_quick_saved * avg_q_time
+            quick_time_cost = total_quick_cost * avg_q_time
+
+            lines.append("quick schema stats - tables confirmed: %d, columns confirmed: %d" % (
+                self.stats_quick_tables_confirmed, self.stats_quick_columns_confirmed))
+            lines.append("quick schema stats - queries saved: %d, queries spent: %d, net: %+d queries" % (
+                total_quick_saved, total_quick_cost, net_quick))
+            lines.append("quick schema stats - time saved: %.1fs = %.1f min (at %.2fs/query %s)" % (
+                quick_time_saved - quick_time_cost,
+                (quick_time_saved - quick_time_cost) / 60.0,
+                avg_q_time, timing_source))
+
+        # ─── Bisection Predictor Stats ───
+        if total_attempts > 0:
+            net_queries = self.stats_queries_saved - self.stats_queries_wasted
+            hit_rate = (100.0 * self.stats_hits / total_attempts) if total_attempts > 0 else 0
+            net_time = self.stats_time_saved - self.stats_time_wasted
+
+            lines.append("predictor stats - hits: %d, misses: %d, hit rate: %.0f%%" % (
+                self.stats_hits, self.stats_misses, hit_rate))
+            lines.append("predictor stats - queries saved: %d, queries wasted: %d, net: %+d queries" % (
+                self.stats_queries_saved, self.stats_queries_wasted, net_queries))
+            lines.append("predictor stats - time saved: %.1fs, time wasted: %.1fs" % (
+                self.stats_time_saved, self.stats_time_wasted))
+
+        # ─── Total Verdict ───
+        total_time_saved = self.stats_time_saved - self.stats_time_wasted
+        total_queries_net = self.stats_queries_saved - self.stats_queries_wasted
+
+        if has_quick_schema:
+            total_time_saved += (quick_time_saved - quick_time_cost)
+            total_queries_net += net_quick
+
+        if total_time_saved > 0 or total_queries_net > 0:
+            lines.append("TOTAL verdict: BENEFICIAL (saved %+d queries, ~%.1f min at %.2fs/query)" % (
+                total_queries_net, total_time_saved / 60.0, avg_q_time))
+        elif total_time_saved < 0:
+            lines.append("TOTAL verdict: DETRIMENTAL (wasted %.1fs = %.1f min, consider --no-predict)" % (
+                abs(total_time_saved), abs(total_time_saved) / 60.0))
         else:
-            lines.append("predictor verdict: NEUTRAL (no net effect)")
+            lines.append("TOTAL verdict: NEUTRAL (no net effect)")
 
         return lines
 
