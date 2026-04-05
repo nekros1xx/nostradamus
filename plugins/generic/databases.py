@@ -545,21 +545,51 @@ class Databases(object):
                                         quickHits, len(remaining))
                                     logger.info(infoMsg)
 
-                        # ─── Nostradamus: Skip blind extraction if we already have all tables ───
+                        # ─── Nostradamus: After quick schema, extract only UNKNOWN tables ───
                         if _quickSchemaSwitched and len(tables) >= int(count):
-                            if index == indexRange[0] or (len(tables) == int(count)):
-                                infoMsg = "quick schema: found all %d tables, skipping blind extraction entirely" % len(tables)
-                                logger.info(infoMsg)
+                            infoMsg = "quick schema: found all %d tables, skipping blind extraction entirely" % len(tables)
+                            logger.info(infoMsg)
                             break
-
-                        # ─── Nostradamus: Show remaining count once after quick schema ───
-                        if (_quickSchemaSwitched and index == indexRange[0]
-                                and len(tables) < int(count)):
-                            remaining_count = int(count) - len(tables)
-                            infoMsg = "quick schema: %d/%d tables found, extracting %d remaining via blind" % (
-                                len(tables), int(count), remaining_count)
+                        elif _quickSchemaSwitched and len(tables) < int(count) and Backend.isDbms(DBMS.MYSQL):
+                            # Use NOT IN query to extract only the tables we DON'T know about
+                            missingCount = int(count) - len(tables)
+                            infoMsg = "quick schema: %d/%d tables found, extracting %d unknown via NOT IN query" % (
+                                len(tables), int(count), missingCount)
                             logger.info(infoMsg)
 
+                            # Build the NOT IN list from all known tables
+                            knownTableNames = set()
+                            for t in tables:
+                                cleanName = unsafeSQLIdentificatorNaming(t).strip('`').strip("'")
+                                knownTableNames.add(cleanName)
+
+                            notInList = ",".join("'%s'" % t for t in sorted(knownTableNames))
+
+                            for missingIdx in range(missingCount):
+                                notInQuery = "SELECT table_name FROM information_schema.tables " \
+                                             "WHERE table_schema='%s' AND table_name NOT IN (%s) " \
+                                             "ORDER BY table_name LIMIT %d,1" % (
+                                                 unsafeSQLIdentificatorNaming(db), notInList, missingIdx)
+
+                                missingTable = unArrayizeValue(inject.getValue(notInQuery, union=False, error=False))
+
+                                if not isNoneValue(missingTable):
+                                    tblName = safeSQLIdentificatorNaming(missingTable, True)
+                                    tables.append(tblName)
+                                    # Add to NOT IN list for next iteration
+                                    knownTableNames.add(missingTable.strip('`').strip("'"))
+                                    notInList = ",".join("'%s'" % t for t in sorted(knownTableNames))
+
+                                    infoMsg = "quick schema: found unknown table '%s' via NOT IN query" % missingTable
+                                    logger.info(infoMsg)
+
+                                    kb.predictor.learn(missingTable)
+
+                            infoMsg = "quick schema: all %d tables found" % len(tables)
+                            logger.info(infoMsg)
+                            break
+
+                        # ─── Normal blind extraction (no quick schema or non-MySQL) ───
                         if Backend.isDbms(DBMS.SYBASE):
                             query = _query % (db, (kb.data.cachedTables[-1] if kb.data.cachedTables else " "))
                         elif Backend.getIdentifiedDbms() in (DBMS.MAXDB, DBMS.ACCESS, DBMS.MCKOI, DBMS.EXTREMEDB):
@@ -573,28 +603,13 @@ class Databases(object):
                         else:
                             query = _query % (unsafeSQLIdentificatorNaming(db), index)
 
-                        # ─── Nostradamus: Skip extraction if we already have all tables ───
-                        if _quickSchemaSwitched and len(tables) >= int(count):
-                            break
-
                         table = unArrayizeValue(inject.getValue(query, union=False, error=False))
 
                         if not isNoneValue(table):
                             kb.hintValue = table
                             table = safeSQLIdentificatorNaming(table, True)
-                            # Avoid duplicates if quick schema already found this table
                             if table.lower().strip('`') not in set(t.lower().strip('`') for t in tables):
                                 tables.append(table)
-                                # ─── Nostradamus: Log new table found via blind ───
-                                if _quickSchemaSwitched:
-                                    infoMsg = "blind extraction: found new table '%s' (not in quick schema)" % table
-                                    logger.info(infoMsg)
-
-                        # ─── Nostradamus: Break early if all tables found after this extraction ───
-                        if _quickSchemaSwitched and len(tables) >= int(count):
-                            infoMsg = "all %d tables found, stopping extraction" % len(tables)
-                            logger.info(infoMsg)
-                            break
 
                     if tables:
                         kb.data.cachedTables[db] = tables
