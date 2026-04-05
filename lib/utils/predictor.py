@@ -1213,6 +1213,91 @@ class SchemaPredictor(object):
         "yahoo.com.mx", "hotmail.com.mx",
     )
 
+    # Hash structure: known total lengths and valid charsets per hash type
+    # Used to (1) filter predictions by length and (2) restrict bisection charset
+    HASH_STRUCTURES = {
+        "bcrypt": {
+            "length": 60,
+            # bcrypt: $2y$10$ + 53 chars of [./A-Za-z0-9]
+            "charset": "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789$",
+        },
+        "phpass": {
+            "length": 34,
+            # phpass: $P$B + 30 chars of [./A-Za-z0-9]
+            "charset": "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789$PHB9CDH",
+        },
+        "md5_hex": {
+            "length": 32,
+            # Plain MD5 hex: 32 chars of [0-9a-f]
+            "charset": "0123456789abcdef",
+        },
+        "sha1_hex": {
+            "length": 40,
+            # Plain SHA1 hex: 40 chars of [0-9a-f]
+            "charset": "0123456789abcdef",
+        },
+        "sha256_hex": {
+            "length": 64,
+            # Plain SHA-256 hex: 64 chars of [0-9a-f]
+            "charset": "0123456789abcdef",
+        },
+        "mysql_native": {
+            "length": 41,
+            # MySQL native: * + 40 hex chars
+            "charset": "0123456789ABCDEF*",
+        },
+        "md5_crypt": {
+            "length": 34,
+            # $1$ + salt + $ + 22 hash chars
+            "charset": "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789$1",
+        },
+    }
+
+    # Map CMS to their default hash structure
+    CMS_HASH_STRUCTURE = {
+        "wordpress": "phpass",
+        "joomla": "bcrypt",
+        "drupal": "bcrypt",
+        "magento": "bcrypt",
+        "prestashop": "md5_hex",  # older versions; newer use bcrypt
+        "moodle": "bcrypt",
+        "django": None,  # variable format (pbkdf2_sha256$iterations$salt$hash)
+        "laravel": "bcrypt",
+        "phpbb": "phpass",
+        "suitecrm": "md5_hex",
+        "vtiger": "md5_hex",
+        "glpi": "bcrypt",
+        "mantis": "bcrypt",
+        "nextcloud": "bcrypt",
+    }
+
+    # Column names that contain IP addresses
+    IP_COLUMN_NAMES = (
+        "ip", "ip_address", "ipaddress", "ip_addr",
+        "user_ip", "last_ip", "login_ip", "client_ip",
+        "remote_ip", "remote_addr", "source_ip",
+        "ip_registration_newsletter",  # PrestaShop
+        "registration_ip", "signup_ip", "created_ip",
+    )
+
+    # Common IP prefixes for private networks and known ranges
+    COMMON_IP_PREFIXES = (
+        # Private ranges
+        "192.168.1.", "192.168.0.", "192.168.10.", "192.168.100.",
+        "10.0.0.", "10.0.1.", "10.1.0.", "10.10.0.", "10.10.1.",
+        "172.16.0.", "172.16.1.", "172.17.0.", "172.31.0.",
+        # Localhost
+        "127.0.0.1",
+        "::1",
+        # Common public prefixes
+        "200.", "201.", "186.", "190.",  # LATAM
+        "82.", "83.", "84.", "85.", "86.", "87.", "88.", "89.",  # Europe
+        "1.", "2.", "3.", "4.", "5.",  # Various
+    )
+
+    # IP charset (only digits and dots for IPv4)
+    IP_CHARSET = "0123456789.:"
+
     # Generic URL/path prefixes (always loaded for URL columns)
     GENERIC_URL_PREFIXES = (
         "http://", "https://", "ftp://",
@@ -1837,6 +1922,23 @@ class SchemaPredictor(object):
             debugMsg = "loaded %d email domain predictions for column '%s'" % (loaded, column_name)
             logger.debug(debugMsg)
 
+        # IP address prediction: load if column name looks like an IP field
+        is_ip_column = col_lower in [i.lower() for i in self.IP_COLUMN_NAMES]
+        if not is_ip_column:
+            for ip_col in self.IP_COLUMN_NAMES:
+                if ip_col.lower() in col_lower or col_lower in ip_col.lower():
+                    is_ip_column = True
+                    break
+
+        if is_ip_column:
+            loaded = 0
+            for prefix in self.COMMON_IP_PREFIXES:
+                self._trie.insert(prefix, self.WEIGHT_COMMON_OUTPUTS)
+                loaded += 1
+
+            debugMsg = "loaded %d IP prefix predictions for column '%s'" % (loaded, column_name)
+            logger.debug(debugMsg)
+
     def detect_cms_from_http(self, headers=None, cookies=None, body=None):
         """
         Passive CMS detection from HTTP response headers, cookies, and body content.
@@ -2378,6 +2480,98 @@ class SchemaPredictor(object):
         candidates = [c for c in candidates if c[0].lower() != partial_value.lower()]
 
         return candidates[:max_results]
+
+    def get_column_charset_restriction(self, column_name):
+        """
+        Returns a restricted charset (list of ord values) for columns with known
+        character sets. This is used to replace the full ASCII table during bisection,
+        dramatically reducing queries per character.
+
+        Returns:
+            List of ord values if restriction applies, None otherwise.
+
+        For hash columns: restricts to the hash-specific charset
+        For IP columns: restricts to digits, dots, colons
+        """
+
+        if not column_name:
+            return None
+
+        col_lower = column_name.lower()
+
+        # Check if this is a hash column
+        is_hash = col_lower in [h.lower() for h in self.HASH_COLUMN_NAMES]
+        if not is_hash:
+            for h in self.HASH_COLUMN_NAMES:
+                if h.lower() in col_lower or col_lower in h.lower():
+                    is_hash = True
+                    break
+
+        if is_hash:
+            # Determine hash type from CMS or from detected prefix
+            hash_struct_name = None
+            if self._detected_cms:
+                hash_struct_name = self.CMS_HASH_STRUCTURE.get(self._detected_cms)
+
+            if hash_struct_name and hash_struct_name in self.HASH_STRUCTURES:
+                struct = self.HASH_STRUCTURES[hash_struct_name]
+                return sorted(set(ord(c) for c in struct["charset"]))
+
+            # No CMS: return a generic hash charset (hex + special chars)
+            generic_hash_chars = "0123456789abcdefABCDEF$./+*=PBHDy"
+            return sorted(set(ord(c) for c in generic_hash_chars))
+
+        # Check if this is an IP column
+        is_ip = col_lower in [i.lower() for i in self.IP_COLUMN_NAMES]
+        if not is_ip:
+            for i in self.IP_COLUMN_NAMES:
+                if i.lower() in col_lower or col_lower in i.lower():
+                    is_ip = True
+                    break
+
+        if is_ip:
+            return sorted(set(ord(c) for c in self.IP_CHARSET))
+
+        return None
+
+    def get_hash_expected_length(self):
+        """
+        Returns the expected hash length based on detected CMS.
+        Used to validate LENGTH() results and for pre-extraction prediction.
+
+        Returns:
+            int or None
+        """
+
+        if not self._detected_cms:
+            return None
+
+        hash_struct_name = self.CMS_HASH_STRUCTURE.get(self._detected_cms)
+        if hash_struct_name and hash_struct_name in self.HASH_STRUCTURES:
+            return self.HASH_STRUCTURES[hash_struct_name]["length"]
+
+        return None
+
+    def learn_ip_prefix(self, ip_value):
+        """
+        Learn the IP prefix from a discovered IP address and predict
+        that other IPs in the same dataset share the same prefix.
+
+        Called after extracting an IP value. If the IP is 192.168.1.105,
+        adds 192.168.1. as a high-weight prediction for future IPs.
+        """
+
+        if not ip_value or '.' not in ip_value:
+            return
+
+        # Extract the first 3 octets as prefix (e.g., "192.168.1.")
+        parts = ip_value.split('.')
+        if len(parts) >= 3:
+            learned_prefix = '.'.join(parts[:3]) + '.'
+            self._trie.insert(learned_prefix, self.WEIGHT_SCHEMA_LEARNING)
+
+            debugMsg = "learned IP prefix '%s' from value '%s'" % (learned_prefix, ip_value)
+            logger.debug(debugMsg)
 
     def get_charset_hint(self, partial_value):
         """

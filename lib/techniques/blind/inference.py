@@ -96,6 +96,21 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
     else:
         asciiTbl = getCharset(charsetType)
 
+    # ─── Nostradamus: Charset restriction for known column types ───
+    # If predictor has a charset restriction for the current column (hash, IP),
+    # replace the full ASCII table with the restricted one.
+    # This reduces queries per character from ~7 to ~4-5 (log2 of smaller charset).
+    if (kb.get("predictor") and not conf.get("noPredict")
+            and kb.predictor._initialized
+            and kb.predictor._current_column_context
+            and charsetType is None and not conf.charset):
+        restrictedCharset = kb.predictor.get_column_charset_restriction(kb.predictor._current_column_context)
+        if restrictedCharset:
+            asciiTbl = restrictedCharset
+            debugMsg = "predictor: restricted charset to %d chars for column '%s'" % (
+                len(restrictedCharset), kb.predictor._current_column_context)
+            logger.debug(debugMsg)
+
     threadData = getCurrentThreadData()
     timeBasedCompare = (getTechnique() in (PAYLOAD.TECHNIQUE.TIME, PAYLOAD.TECHNIQUE.STACKED))
     retVal = hashDBRetrieve(expression, checkConf=True)
@@ -911,6 +926,13 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
             # Feed discovered value to the schema predictor for future predictions
             if kb.get("predictor") and finalValue and not re.search(r"(?i)(\b|CHAR_)(LENGTH|LEN|COUNT)\(", expression):
                 kb.predictor.learn(finalValue)
+
+                # Learn IP prefix for cross-row prediction
+                if kb.predictor._current_column_context:
+                    col_lower = kb.predictor._current_column_context.lower()
+                    is_ip = any(ip.lower() in col_lower or col_lower in ip.lower() for ip in kb.predictor.IP_COLUMN_NAMES)
+                    if is_ip:
+                        kb.predictor.learn_ip_prefix(finalValue)
 
                 # Persist learned values to session hashDB for cross-run learning
                 try:
