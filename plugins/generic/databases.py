@@ -395,6 +395,12 @@ class Databases(object):
                                 # Teach predictor about this table
                                 kb.predictor.learn(candidateTable)
 
+                                infoMsg = "quick schema: '%s' exists" % candidateTable
+                                logger.info(infoMsg)
+                            else:
+                                debugMsg = "quick schema: '%s' not found" % candidateTable
+                                logger.debug(debugMsg)
+
                         if confirmedTables:
                             # Log stats
                             statsLines = kb.predictor.get_quick_schema_stats(len(confirmedTables), len(quickTables))
@@ -510,6 +516,7 @@ class Databases(object):
                                     logger.info(infoMsg)
 
                                     quickHits = 0
+                                    quickMisses = 0
                                     for candidateTable in remaining:
                                         checkQuery = "SELECT COUNT(*) FROM information_schema.tables " \
                                                      "WHERE table_schema='%s' AND table_name='%s'" % (
@@ -526,6 +533,13 @@ class Databases(object):
                                                 alreadyFound.add(tblName.lower().strip('`'))
                                                 quickHits += 1
                                                 kb.predictor.learn(candidateTable)
+
+                                            infoMsg = "quick schema: '%s' exists" % candidateTable
+                                            logger.info(infoMsg)
+                                        else:
+                                            quickMisses += 1
+                                            debugMsg = "quick schema: '%s' not found" % candidateTable
+                                            logger.debug(debugMsg)
 
                                     infoMsg = "quick schema: confirmed %d/%d tables via direct queries" % (
                                         quickHits, len(remaining))
@@ -990,6 +1004,70 @@ class Databases(object):
                                 errMsg += "in database '%s'" % unsafeSQLIdentificatorNaming(conf.db)
                             logger.error(errMsg)
                             continue
+
+                # ─── Nostradamus: Quick column verification ───
+                # If CMS is detected and we know the columns for this table,
+                # verify them with direct existence queries before char-by-char extraction.
+                _quickColumnsSwitched = False
+                if (kb.get("predictor") and not conf.get("noPredict")
+                        and kb.predictor._detected_cms
+                        and Backend.isDbms(DBMS.MYSQL)
+                        and isNumPosStrValue(count)
+                        and not dumpMode):
+
+                    # Set table context so predictor loads known columns
+                    tblClean = unsafeSQLIdentificatorNaming(tbl)
+                    kb.predictor.set_table_context(tblClean)
+
+                    # Check if we have known columns for this table
+                    from lib.utils.predictor import SchemaPredictor
+                    knownCols = SchemaPredictor.TABLE_COLUMNS.get(tblClean)
+                    if not knownCols:
+                        for tblKey, cols in SchemaPredictor.TABLE_COLUMNS.items():
+                            if tblKey.lower() == tblClean.lower():
+                                knownCols = cols
+                                break
+
+                    if knownCols:
+                        infoMsg = "quick columns: verifying %d known columns for table '%s'" % (
+                            len(knownCols), tblClean)
+                        logger.info(infoMsg)
+
+                        _quickColumnsSwitched = True
+                        for candidateCol in knownCols:
+                            checkQuery = "SELECT COUNT(*) FROM information_schema.columns " \
+                                         "WHERE table_schema='%s' AND table_name='%s' AND column_name='%s'" % (
+                                             unsafeSQLIdentificatorNaming(conf.db),
+                                             unsafeSQLIdentificatorNaming(tblClean),
+                                             candidateCol)
+
+                            result = inject.getValue(checkQuery, union=False, error=False,
+                                                     expected=EXPECTED.INT,
+                                                     charsetType=CHARSET_TYPE.DIGITS)
+
+                            if result and str(result).strip() not in ("0", ""):
+                                colName = safeSQLIdentificatorNaming(candidateCol)
+                                if colName not in columns:
+                                    columns[colName] = None
+                                infoMsg = "quick columns: '%s' exists" % candidateCol
+                                logger.info(infoMsg)
+                            else:
+                                debugMsg = "quick columns: '%s' not found" % candidateCol
+                                logger.debug(debugMsg)
+
+                        if len(columns) >= int(count):
+                            infoMsg = "quick columns: found all %d columns for table '%s'" % (
+                                len(columns), tblClean)
+                            logger.info(infoMsg)
+
+                            # Skip the normal extraction loop
+                            table[safeSQLIdentificatorNaming(tbl, True)] = columns
+                            kb.data.cachedColumns[safeSQLIdentificatorNaming(conf.db)] = table
+                            continue
+
+                        infoMsg = "quick columns: found %d/%s columns, extracting remaining via blind" % (
+                            len(columns), count)
+                        logger.info(infoMsg)
 
                 for index in getLimitRange(count):
                     if Backend.getIdentifiedDbms() in (DBMS.MYSQL, DBMS.PGSQL, DBMS.HSQLDB, DBMS.VERTICA, DBMS.PRESTO, DBMS.CRATEDB, DBMS.CUBRID, DBMS.CACHE, DBMS.FRONTBASE, DBMS.VIRTUOSO):
