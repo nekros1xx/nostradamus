@@ -481,7 +481,68 @@ class Databases(object):
                     plusOne = Backend.getIdentifiedDbms() in PLUS_ONE_DBMSES
                     indexRange = getLimitRange(count, plusOne=plusOne)
 
+                    # ─── Nostradamus: track if we should switch to quick schema mid-extraction ───
+                    _quickSchemaSwitched = False
+
                     for index in indexRange:
+                        # ─── Nostradamus: Mid-extraction quick schema switch ───
+                        # If CMS was just detected during extraction of the previous table,
+                        # stop extracting char-by-char and verify all remaining tables
+                        # with direct existence queries instead.
+                        if (not _quickSchemaSwitched
+                                and kb.get("predictor") and not conf.get("noPredict")
+                                and kb.predictor._detected_cms
+                                and Backend.isDbms(DBMS.MYSQL)
+                                and len(tables) >= 1):  # at least 1 table already extracted
+
+                            _quickSchemaSwitched = True
+                            quickCandidates = kb.predictor.get_quick_schema_tables()
+
+                            if quickCandidates:
+                                # Remove tables we already found
+                                alreadyFound = set(t.lower().strip('`') for t in tables)
+                                remaining = [t for t in quickCandidates if t.lower() not in alreadyFound]
+
+                                if remaining:
+                                    infoMsg = "quick schema switch: verifying %d candidate tables " \
+                                              "for CMS '%s' (skipping char-by-char extraction)" % (
+                                                  len(remaining), kb.predictor._detected_cms)
+                                    logger.info(infoMsg)
+
+                                    quickHits = 0
+                                    for candidateTable in remaining:
+                                        checkQuery = "SELECT COUNT(*) FROM information_schema.tables " \
+                                                     "WHERE table_schema='%s' AND table_name='%s'" % (
+                                                         unsafeSQLIdentificatorNaming(db), candidateTable)
+
+                                        result = inject.getValue(checkQuery, union=False, error=False,
+                                                                 expected=EXPECTED.INT,
+                                                                 charsetType=CHARSET_TYPE.DIGITS)
+
+                                        if result and str(result).strip() not in ("0", ""):
+                                            tblName = safeSQLIdentificatorNaming(candidateTable, True)
+                                            if tblName.lower().strip('`') not in alreadyFound:
+                                                tables.append(tblName)
+                                                alreadyFound.add(tblName.lower().strip('`'))
+                                                quickHits += 1
+                                                kb.predictor.learn(candidateTable)
+
+                                    infoMsg = "quick schema: confirmed %d/%d tables via direct queries" % (
+                                        quickHits, len(remaining))
+                                    logger.info(infoMsg)
+
+                                    # Check if we found all tables
+                                    if len(tables) >= int(count):
+                                        infoMsg = "quick schema: found all %d tables, skipping remaining extraction" % len(tables)
+                                        logger.info(infoMsg)
+                                        break
+
+                                    # If some tables are still missing, continue normal extraction
+                                    # but only for the missing ones
+                                    infoMsg = "quick schema: %d/%d tables found, extracting %d remaining via blind" % (
+                                        len(tables), int(count), int(count) - len(tables))
+                                    logger.info(infoMsg)
+
                         if Backend.isDbms(DBMS.SYBASE):
                             query = _query % (db, (kb.data.cachedTables[-1] if kb.data.cachedTables else " "))
                         elif Backend.getIdentifiedDbms() in (DBMS.MAXDB, DBMS.ACCESS, DBMS.MCKOI, DBMS.EXTREMEDB):
@@ -500,7 +561,9 @@ class Databases(object):
                         if not isNoneValue(table):
                             kb.hintValue = table
                             table = safeSQLIdentificatorNaming(table, True)
-                            tables.append(table)
+                            # Avoid duplicates if quick schema already found this table
+                            if table.lower().strip('`') not in set(t.lower().strip('`') for t in tables):
+                                tables.append(table)
 
                     if tables:
                         kb.data.cachedTables[db] = tables
