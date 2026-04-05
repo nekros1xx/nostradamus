@@ -1703,13 +1703,36 @@ class SchemaPredictor(object):
         # Detect dated/sharded table patterns (events_2023_01, partition_0, etc.)
         self.detect_dated_pattern(value)
 
+    # CMS detection by table prefix (faster than fingerprint - triggers on first table)
+    CMS_PREFIX_DETECTION = {
+        "wp_": "wordpress",
+        "jos_": "joomla",
+        "mdl_": "moodle",
+        "ps_": "prestashop",
+        "phpbb_": "phpbb",
+        "oc_": "nextcloud",
+        "vtiger_": "vtiger",
+        "llx_": "dolibarr",
+        "glpi_": "glpi",
+        "mantis_": "mantis",
+    }
+
     def _try_detect_cms(self, table_name):
         """
-        Check if a discovered table name matches a CMS fingerprint.
+        Check if a discovered table name matches a CMS fingerprint or prefix.
         If detected, boost all tables from that CMS to high weight.
+
+        Detection methods (in order):
+        1. Exact fingerprint table match (wp_options, jos_extensions, etc.)
+        2. Prefix match (wp_*, jos_*, mdl_*, etc.) - triggers on ANY table with CMS prefix
         """
 
+        if self._detected_cms:
+            return
+
         lower_name = table_name.lower()
+
+        # Method 1: Exact fingerprint match
         for cms, fingerprints in self.CMS_FINGERPRINTS.items():
             for fp in fingerprints:
                 if lower_name == fp.lower():
@@ -1717,9 +1740,20 @@ class SchemaPredictor(object):
                     self._apply_cms_boost(cms)
                     self._load_db_names_for_cms(cms)
 
-                    debugMsg = "CMS detected: %s (fingerprint: %s)" % (cms, table_name)
-                    logger.info(debugMsg)
+                    infoMsg = "CMS detected: %s (fingerprint: %s)" % (cms, table_name)
+                    logger.info(infoMsg)
                     return
+
+        # Method 2: Prefix-based detection (catches wp_comments, wp_links, etc.)
+        for prefix, cms in self.CMS_PREFIX_DETECTION.items():
+            if lower_name.startswith(prefix):
+                self._detected_cms = cms
+                self._apply_cms_boost(cms)
+                self._load_db_names_for_cms(cms)
+
+                infoMsg = "CMS detected: %s (prefix: %s from table %s)" % (cms, prefix, table_name)
+                logger.info(infoMsg)
+                return
 
     def _apply_cms_boost(self, cms):
         """

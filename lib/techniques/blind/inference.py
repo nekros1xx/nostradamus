@@ -574,8 +574,11 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                                 if weight >= predictor.WEIGHT_STATIC_DICT and cand not in candidatesToTry:
                                     candidatesToTry.append(cand)
 
-                    # Try up to 3 candidates (to avoid too many wasted queries)
-                    for bestCandidate in candidatesToTry[:3]:
+                    # When CMS is detected, try more candidates since misses are cheap (~0.3s each)
+                    # For boolean-based blind, each miss costs ~0.01s, so trying 10 is negligible
+                    maxPreTries = 10 if predictor._detected_cms else 3
+
+                    for bestCandidate in candidatesToTry[:maxPreTries]:
                         testValue = unescaper.escape("'%s'" % bestCandidate) if "'" not in bestCandidate else unescaper.escape("%s" % bestCandidate, quote=False)
                         query = getTechniqueData().vector
                         query = agent.prefixQuery(query.replace(INFERENCE_MARKER, "(%s)%s%s" % (expressionUnescaped, INFERENCE_EQUALS_CHAR, testValue)))
@@ -746,13 +749,14 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                         # Less than 5% hit rate after 12+ attempts - skip equality checks
                         pass
                     elif predictorAttemptsThisValue < PREDICTOR_MAX_ATTEMPTS_PER_VALUE and len(partialValue) >= 3:
-                        candidates = predictor.predict(partialValue, length_filter=length, max_results=3)
+                        candidates = predictor.predict(partialValue, length_filter=length, max_results=5)
 
                         if candidates:
                             bestCandidate, bestWeight = candidates[0]
 
                             # Smart trigger: wait for more chars if confidence is low
-                            minCharsForWeight = 3 if bestWeight >= predictor.WEIGHT_PATTERN_DERIVED else 4
+                            # CMS detected tables (weight 90) trigger at 3 chars
+                            minCharsForWeight = 3 if bestWeight >= predictor.WEIGHT_STATIC_DICT else 4
 
                             # Only attempt if:
                             # - Weight is high enough

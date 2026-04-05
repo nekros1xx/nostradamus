@@ -17,7 +17,7 @@ sqlmap includes a built-in `--predict-output` flag (internally called "Good Sama
 ## Features
 
 ### Predictive Schema Inference Engine
-- **34,000+ entries** in optimized Trie data structure for O(k) prefix lookup
+- **34,000+ entries** in optimized prefix tree for instant lookup — finding all matches for a prefix like `wp_us` takes the same time whether the dictionary has 100 or 100,000 entries
 - **5 prediction layers** with priority weights (learned > CMS detected > pattern > dictionary > language)
 - **Self-learning** — detects prefixes, separators, case style (lowercase, UPPERCASE, camelCase, PascalCase), and language (EN/ES/PT) from extracted values
 - **Charset hints** — optimizes bisection order even when exact prediction fails (free, no extra queries)
@@ -67,7 +67,21 @@ When extracting password hash columns (`password`, `user_pass`, `pass_hash`, etc
 | Laravel | bcrypt | `$2y$10$`, `$2y$12$` |
 | Nextcloud | Argon2 / bcrypt | `$argon2id$v=19$`, `$2y$10$` |
 
-Without CMS detection, loads all common hash prefixes: bcrypt, phpass, MD5 crypt, SHA-256, SHA-512, Argon2, MySQL native. A bcrypt hash prefix (`$2y$10$`) saves 7 characters × 8 queries = **56 queries** per hash.
+Without CMS detection, loads all common hash prefixes: bcrypt, phpass, MD5 crypt, SHA-256, SHA-512, Argon2, MySQL native.
+
+### Hash Structure Charset Restriction
+Beyond prefix prediction, Nostradamus knows the exact charset and length of each hash type. When extracting a hash value, it replaces the full ASCII table (95 chars) with the hash-specific charset, reducing the number of queries per character:
+
+| Column type | Charset size | vs ASCII (95) | Queries/char |
+|-------------|-------------|---------------|-------------|
+| Normal text | 95 | baseline | ~7 |
+| WordPress hash (phpass) | 71 | -25% | ~6.2 |
+| Joomla hash (bcrypt) | 66 | -31% | ~6.0 |
+| Generic hash | 33 | -65% | ~5.0 |
+| MySQL native hash | 17 | -82% | ~4.1 |
+| MD5 hex hash | 16 | **-83%** | **~4.0** |
+
+Also knows expected hash lengths: 34 for phpass, 60 for bcrypt, 32 for MD5 hex, 41 for MySQL native.
 
 ### Email Domain Prediction
 When extracting email columns (`email`, `user_email`, `email1`, `contact_email`, etc.), Nostradamus predicts the domain after the `@` is extracted:
@@ -75,6 +89,15 @@ When extracting email columns (`email`, `user_email`, `email1`, `contact_email`,
 `@gmail.com`, `@hotmail.com`, `@yahoo.com`, `@outlook.com`, `@icloud.com`, `@protonmail.com` plus regional variants (`@hotmail.es`, `@gmail.com.br`, `@yahoo.com.ar`, `@yahoo.com.mx`, etc.)
 
 Predicting `@gmail.com` saves 10 characters × 8 queries = **80 queries** per email address.
+
+### IP Address Prediction
+When extracting IP columns (`ip_address`, `user_ip`, `login_ip`, `remote_addr`, etc.), Nostradamus provides three optimizations:
+
+**Prefix prediction** — preloaded with common private ranges (`192.168.1.`, `10.0.0.`, `172.16.0.`, `127.0.0.1`) and common public prefixes.
+
+**Charset restriction** — IPv4 only uses 12 characters (`0-9`, `.`, `:`), reducing queries from ~7 to **~3.6 per character** (48% reduction).
+
+**Cross-row learning** — if the first extracted IP is `192.168.50.105`, learns the prefix `192.168.50.` at maximum weight and predicts it for all subsequent rows in the same table.
 
 ### CMS-Aware URL/Path Prediction
 For URL-type columns (`url`, `avatar`, `image_url`, `filepath`, etc.), loads CMS-specific path prefixes **only when that CMS is detected**:
