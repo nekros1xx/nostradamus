@@ -545,17 +545,20 @@ class Databases(object):
                                         quickHits, len(remaining))
                                     logger.info(infoMsg)
 
-                                    # Check if we found all tables
-                                    if len(tables) >= int(count):
-                                        infoMsg = "quick schema: found all %d tables, skipping remaining extraction" % len(tables)
-                                        logger.info(infoMsg)
-                                        break
+                        # ─── Nostradamus: Skip blind extraction if we already have all tables ───
+                        if _quickSchemaSwitched and len(tables) >= int(count):
+                            if index == indexRange[0] or (len(tables) == int(count)):
+                                infoMsg = "quick schema: found all %d tables, skipping blind extraction entirely" % len(tables)
+                                logger.info(infoMsg)
+                            break
 
-                                    # If some tables are still missing, continue normal extraction
-                                    # but only for the missing ones
-                                    infoMsg = "quick schema: %d/%d tables found, extracting %d remaining via blind" % (
-                                        len(tables), int(count), int(count) - len(tables))
-                                    logger.info(infoMsg)
+                        # ─── Nostradamus: Show remaining count once after quick schema ───
+                        if (_quickSchemaSwitched and index == indexRange[0]
+                                and len(tables) < int(count)):
+                            remaining_count = int(count) - len(tables)
+                            infoMsg = "quick schema: %d/%d tables found, extracting %d remaining via blind" % (
+                                len(tables), int(count), remaining_count)
+                            logger.info(infoMsg)
 
                         if Backend.isDbms(DBMS.SYBASE):
                             query = _query % (db, (kb.data.cachedTables[-1] if kb.data.cachedTables else " "))
