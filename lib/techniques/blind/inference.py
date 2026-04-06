@@ -776,10 +776,11 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
 
                 # Schema predictor feature
                 # Rules to minimize wasted queries:
-                # 1. Max 3 attempts per value (not unlimited, not just 1)
+                # 1. Max attempts per value (3 without CMS, 5 with CMS)
                 # 2. Only retry if the top candidate CHANGED (more chars = better candidate)
-                # 3. Auto-disable if hit rate < 10% after 8+ attempts across all values
+                # 3. Auto-disable if hit rate < 10% after 20+ attempts across all values
                 # 4. Charset hints are always FREE (no extra queries)
+                # 5. Only attempt equality checks for high-confidence candidates (CMS or learned)
                 if kb.get("predictor") and len(partialValue) > 0 and not kb.fileReadMode and not conf.get("noPredict"):
                     val = None
                     predictor = kb.predictor
@@ -788,7 +789,7 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                     totalAttempts = predictor.stats_hits + predictor.stats_misses
                     hitRate = (predictor.stats_hits / totalAttempts) if totalAttempts > 0 else 1.0
                     if totalAttempts >= 20 and hitRate < 0.05:
-                        # Less than 5% hit rate after 12+ attempts - skip equality checks
+                        # Less than 5% hit rate after 20+ attempts - skip equality checks
                         pass
                     elif predictorAttemptsThisValue < PREDICTOR_MAX_ATTEMPTS_PER_VALUE and len(partialValue) >= 3:
                         candidates = predictor.predict(partialValue, length_filter=length, max_results=5)
@@ -796,15 +797,21 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                         if candidates:
                             bestCandidate, bestWeight = candidates[0]
 
-                            # Smart trigger: wait for more chars if confidence is low
-                            # CMS detected tables (weight 90) trigger at 3 chars
-                            minCharsForWeight = 3 if bestWeight >= predictor.WEIGHT_STATIC_DICT else 4
+                            # Only attempt equality checks for HIGH confidence candidates:
+                            # - WEIGHT_CMS_DETECTED (90): CMS tables verified by fingerprint
+                            # - WEIGHT_SCHEMA_LEARNING (100): values seen in current session
+                            # Pattern-derived (80) and static dict (40) are NOT worth the
+                            # cost of a failed equality check in time-based blind (~5s each)
+                            minWeight = predictor.WEIGHT_CMS_DETECTED  # 90
+
+                            # Smart trigger: wait for more chars if confidence is lower
+                            minCharsForWeight = 3 if bestWeight >= minWeight else 4
 
                             # Only attempt if:
-                            # - Weight is high enough
+                            # - Weight is high enough (CMS detected or learned)
                             # - We have enough chars for this weight level
                             # - The candidate is DIFFERENT from what we already tried
-                            if (bestWeight >= predictor.WEIGHT_STATIC_DICT
+                            if (bestWeight >= minWeight
                                     and len(partialValue) >= minCharsForWeight
                                     and bestCandidate != predictorLastTriedCandidate):
 
@@ -860,12 +867,14 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                         break
 
                     # Charset hints - FREE optimization (no extra queries)
-                    if not val:
+                    # Only reorder charset if we have strong hints (many candidates)
+                    # to avoid degrading bisection performance with bad hints
+                    if not val and len(partialValue) >= 2:
                         charsetHint = predictor.get_charset_hint(partialValue)
-                        if charsetHint:
+                        if charsetHint and len(charsetHint) >= 3:
                             hintSet = set(charsetHint)
                             prioritizedCharset = charsetHint + [c for c in asciiTbl if c not in hintSet]
-                            val = getChar(index, prioritizedCharset, False)
+                            val = getChar(index, prioritizedCharset, True)
 
                     if val:
                         predictorHandled = True
