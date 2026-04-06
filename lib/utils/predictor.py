@@ -98,24 +98,27 @@ class PredictionTrie(object):
             node = node.children[char]
 
         results = []
-        self._collect(node, results)
-
-        if length_filter is not None:
-            results = [r for r in results if len(r[0]) == length_filter]
+        # Collect with a cap to avoid traversing huge subtrees
+        # We collect more than max_results to allow for length filtering and sorting
+        collect_limit = max_results * 10 if length_filter is None else max_results * 20
+        self._collect(node, results, length_filter, collect_limit)
 
         results.sort(key=lambda x: -x[1])
         return results[:max_results]
 
-    def _collect(self, node, results):
+    def _collect(self, node, results, length_filter=None, limit=500):
         """
-        Recursively collect all words from a given node
+        Collect words from a given node using iterative DFS with limit.
         """
 
-        if node.is_end:
-            results.append((node.value, node.weight))
-
-        for child in node.children.values():
-            self._collect(child, results)
+        stack = [node]
+        while stack and len(results) < limit:
+            current = stack.pop()
+            if current.is_end:
+                if length_filter is None or len(current.value) == length_filter:
+                    results.append((current.value, current.weight))
+            for child in current.children.values():
+                stack.append(child)
 
     def __len__(self):
         return self._size
@@ -1554,6 +1557,16 @@ class SchemaPredictor(object):
         self.stats_quick_columns_confirmed = 0   # columns found via existence queries
         self.stats_quick_columns_missed = 0      # columns checked but not found
 
+        # Precomputed lowercase sets for fast column type detection
+        self._hash_col_lower = set(h.lower() for h in self.HASH_COLUMN_NAMES)
+        self._ip_col_lower = set(i.lower() for i in self.IP_COLUMN_NAMES)
+        self._email_col_lower = set(e.lower() for e in self.EMAIL_COLUMN_NAMES)
+        self._url_col_lower = set(u.lower() for u in self.URL_COLUMN_NAMES)
+
+        # Cache for predict() -> get_charset_hint() reuse
+        self._last_predict_partial = None
+        self._last_predict_candidates = []
+
     def initialize(self):
         """
         Load static dictionaries into the trie.
@@ -1887,12 +1900,12 @@ class SchemaPredictor(object):
 
         # URL/path prediction: load if column name looks like a URL field
         col_lower = column_name.lower()
-        is_url_column = col_lower in [u.lower() for u in self.URL_COLUMN_NAMES]
+        is_url_column = col_lower in self._url_col_lower
 
         # Also check partial matches (e.g., "avatar_url" contains "url")
         if not is_url_column:
-            for url_col in self.URL_COLUMN_NAMES:
-                if url_col.lower() in col_lower or col_lower in url_col.lower():
+            for url_col in self._url_col_lower:
+                if url_col in col_lower or col_lower in url_col:
                     is_url_column = True
                     break
 
@@ -1916,10 +1929,10 @@ class SchemaPredictor(object):
             logger.debug(debugMsg)
 
         # Hash type prediction: load if column name looks like a password hash field
-        is_hash_column = col_lower in [h.lower() for h in self.HASH_COLUMN_NAMES]
+        is_hash_column = col_lower in self._hash_col_lower
         if not is_hash_column:
-            for hash_col in self.HASH_COLUMN_NAMES:
-                if hash_col.lower() in col_lower or col_lower in hash_col.lower():
+            for hash_col in self._hash_col_lower:
+                if hash_col in col_lower or col_lower in hash_col:
                     is_hash_column = True
                     break
 
@@ -1945,10 +1958,10 @@ class SchemaPredictor(object):
             logger.debug(debugMsg)
 
         # Email prediction: load if column name looks like an email field
-        is_email_column = col_lower in [e.lower() for e in self.EMAIL_COLUMN_NAMES]
+        is_email_column = col_lower in self._email_col_lower
         if not is_email_column:
-            for email_col in self.EMAIL_COLUMN_NAMES:
-                if email_col.lower() in col_lower or col_lower in email_col.lower():
+            for email_col in self._email_col_lower:
+                if email_col in col_lower or col_lower in email_col:
                     is_email_column = True
                     break
 
@@ -1963,10 +1976,10 @@ class SchemaPredictor(object):
             logger.debug(debugMsg)
 
         # IP address prediction: load if column name looks like an IP field
-        is_ip_column = col_lower in [i.lower() for i in self.IP_COLUMN_NAMES]
+        is_ip_column = col_lower in self._ip_col_lower
         if not is_ip_column:
-            for ip_col in self.IP_COLUMN_NAMES:
-                if ip_col.lower() in col_lower or col_lower in ip_col.lower():
+            for ip_col in self._ip_col_lower:
+                if ip_col in col_lower or col_lower in ip_col:
                     is_ip_column = True
                     break
 
@@ -2454,6 +2467,8 @@ class SchemaPredictor(object):
         Main prediction method. Returns list of (candidate, weight) tuples.
         Searches with case normalization so CUSTOMER_MASTER matches customer_master.
 
+        Also caches the last search results for get_charset_hint() reuse.
+
         Args:
             partial_value: characters retrieved so far
             length_filter: if known, filter candidates by exact length
@@ -2476,33 +2491,24 @@ class SchemaPredictor(object):
             self.initialize()
 
         if not partial_value or len(partial_value) < self.MIN_PREFIX_LENGTH:
+            self._last_predict_candidates = []
             return []
 
         if max_results is None:
             max_results = self.MAX_CANDIDATES_TO_VERIFY
 
-        # Search with original case
+        # The trie stores keys as lowercase internally, so search_prefix
+        # already matches case-insensitively. No need for a second search.
         candidates = self._trie.search_prefix(
             partial_value,
             max_results=max_results * 5,
             length_filter=length_filter
         )
 
-        # Also search with lowercase (catches ALL_CAPS input matching lowercase dict)
-        if partial_value != partial_value.lower():
-            lower_candidates = self._trie.search_prefix(
-                partial_value.lower(),
-                max_results=max_results * 5,
-                length_filter=length_filter
-            )
-            # Re-case the candidates to match the input style
-            is_upper = partial_value == partial_value.upper()
-            for val, weight in lower_candidates:
-                if is_upper:
-                    recased = val.upper()
-                else:
-                    recased = val
-                candidates.append((recased, weight))
+        # If input is uppercase, re-case candidates to match
+        is_upper = partial_value == partial_value.upper() and not partial_value == partial_value.lower()
+        if is_upper:
+            candidates = [(val.upper(), weight) for val, weight in candidates]
 
         # Deduplicate by lowercase key, keeping highest weight
         seen = {}
@@ -2514,24 +2520,23 @@ class SchemaPredictor(object):
         candidates = sorted(seen.values(), key=lambda x: -x[1])
 
         # Filter out candidates that are identical to the partial value
-        # (no point predicting what we already have)
-        # But keep same-content candidates if they're a valid short prediction
-        # (e.g., hash prefix "$P$D" when partial is "$P$D" - it's a complete value)
         candidates = [c for c in candidates if c[0].lower() != partial_value.lower()]
 
-        return candidates[:max_results]
+        result = candidates[:max_results]
+
+        # Cache for get_charset_hint() reuse
+        self._last_predict_partial = partial_value
+        self._last_predict_candidates = candidates
+
+        return result
 
     def get_column_charset_restriction(self, column_name):
         """
         Returns a restricted charset (list of ord values) for columns with known
-        character sets. This is used to replace the full ASCII table during bisection,
-        dramatically reducing queries per character.
+        character sets. Uses precomputed lowercase sets for fast lookup.
 
         Returns:
             List of ord values if restriction applies, None otherwise.
-
-        For hash columns: restricts to the hash-specific charset
-        For IP columns: restricts to digits, dots, colons
         """
 
         if not column_name:
@@ -2539,16 +2544,15 @@ class SchemaPredictor(object):
 
         col_lower = column_name.lower()
 
-        # Check if this is a hash column
-        is_hash = col_lower in [h.lower() for h in self.HASH_COLUMN_NAMES]
+        # Check if this is a hash column (fast set lookup + substring check)
+        is_hash = col_lower in self._hash_col_lower
         if not is_hash:
-            for h in self.HASH_COLUMN_NAMES:
-                if h.lower() in col_lower or col_lower in h.lower():
+            for h in self._hash_col_lower:
+                if h in col_lower or col_lower in h:
                     is_hash = True
                     break
 
         if is_hash:
-            # Determine hash type from CMS or from detected prefix
             hash_struct_name = None
             if self._detected_cms:
                 hash_struct_name = self.CMS_HASH_STRUCTURE.get(self._detected_cms)
@@ -2557,15 +2561,14 @@ class SchemaPredictor(object):
                 struct = self.HASH_STRUCTURES[hash_struct_name]
                 return sorted(set(ord(c) for c in struct["charset"]))
 
-            # No CMS: return a generic hash charset (hex + special chars)
             generic_hash_chars = "0123456789abcdefABCDEF$./+*=PBHDy"
             return sorted(set(ord(c) for c in generic_hash_chars))
 
-        # Check if this is an IP column
-        is_ip = col_lower in [i.lower() for i in self.IP_COLUMN_NAMES]
+        # Check if this is an IP column (fast set lookup + substring check)
+        is_ip = col_lower in self._ip_col_lower
         if not is_ip:
-            for i in self.IP_COLUMN_NAMES:
-                if i.lower() in col_lower or col_lower in i.lower():
+            for i in self._ip_col_lower:
+                if i in col_lower or col_lower in i:
                     is_ip = True
                     break
 
@@ -2618,9 +2621,8 @@ class SchemaPredictor(object):
         Returns a prioritized charset based on what characters are most likely
         at the next position, given the partial value so far.
 
-        This is used as a fallback when no single candidate is strong enough
-        to verify with a full equality check, but we can still optimize
-        the bisection by reordering the charset.
+        Reuses cached results from the last predict() call when possible,
+        avoiding a redundant trie traversal.
 
         >>> p = SchemaPredictor()
         >>> p.initialize()
@@ -2635,16 +2637,24 @@ class SchemaPredictor(object):
         if not partial_value:
             return []
 
-        candidates = self._trie.search_prefix(partial_value, max_results=50)
+        # Reuse candidates from last predict() call if prefix matches
+        if (hasattr(self, '_last_predict_partial')
+                and self._last_predict_partial == partial_value
+                and hasattr(self, '_last_predict_candidates')
+                and self._last_predict_candidates):
+            candidates = self._last_predict_candidates
+        else:
+            candidates = self._trie.search_prefix(partial_value, max_results=50)
 
         if not candidates:
             return []
 
         # Collect the next character from each candidate, weighted
         char_weights = {}
+        plen = len(partial_value)
         for candidate_value, weight in candidates:
-            if len(candidate_value) > len(partial_value):
-                next_char = candidate_value[len(partial_value)]
+            if len(candidate_value) > plen:
+                next_char = candidate_value[plen]
                 char_weights[next_char] = char_weights.get(next_char, 0) + weight
 
         # Sort by weight and return as list of ord values
