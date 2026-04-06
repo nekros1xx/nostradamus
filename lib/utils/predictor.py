@@ -1556,6 +1556,8 @@ class SchemaPredictor(object):
         self.stats_quick_tables_missed = 0       # tables checked but not found
         self.stats_quick_columns_confirmed = 0   # columns found via existence queries
         self.stats_quick_columns_missed = 0      # columns checked but not found
+        self.stats_prefix_skips = 0              # number of prefix skip verifications
+        self.stats_prefix_chars_saved = 0        # total characters skipped via prefix
 
         # Precomputed lowercase sets for fast column type detection
         self._hash_col_lower = set(h.lower() for h in self.HASH_COLUMN_NAMES)
@@ -1566,6 +1568,9 @@ class SchemaPredictor(object):
         # Cache for predict() -> get_charset_hint() reuse
         self._last_predict_partial = None
         self._last_predict_candidates = []
+
+        # Ordered extraction: track previous value for min-char optimization
+        self._previous_extracted_value = None
 
     def initialize(self):
         """
@@ -2616,6 +2621,58 @@ class SchemaPredictor(object):
             debugMsg = "learned IP prefix '%s' from value '%s'" % (learned_prefix, ip_value)
             logger.debug(debugMsg)
 
+    def get_min_char_for_position(self, partial_value, position):
+        """
+        Returns the minimum possible character (as ord value) for the given position,
+        based on the alphabetical ordering of values from information_schema.
+
+        If we extracted tables in order and the previous table was 'erp_customers',
+        then the next table at position 5 (after 'erp_') must have char >= 'c'.
+
+        If the partial value already diverges from the previous value (e.g., partial='erp_d'
+        vs previous='erp_customers'), all chars are possible since 'd' > 'c'.
+
+        Args:
+            partial_value: characters extracted so far for current value
+            position: 1-indexed character position being extracted
+
+        Returns:
+            int (ord value) of minimum possible char, or None if no constraint
+        """
+
+        prev = self._previous_extracted_value
+        if not prev:
+            return None
+
+        # Position is 1-indexed in sqlmap
+        idx = position - 1  # convert to 0-indexed
+
+        # Check if we're still in the "matching prefix" zone
+        # If any previous character in the partial already differs from prev,
+        # then there's no constraint (current value is already > previous)
+        for i in range(min(len(partial_value), len(prev))):
+            if i >= idx:
+                break
+            if i < len(partial_value):
+                if partial_value[i].lower() > prev[i].lower():
+                    # Current value already > previous at an earlier position
+                    return None
+                elif partial_value[i].lower() < prev[i].lower():
+                    # Should not happen in ordered extraction, but be safe
+                    return None
+
+        # If we reach here, all chars up to current position match the previous value
+        # So the current position char must be >= the corresponding char in prev
+        if idx < len(prev):
+            return ord(prev[idx].lower())
+
+        return None
+
+    def set_previous_value(self, value):
+        """Record the last fully extracted value for ordered extraction optimization."""
+        if value:
+            self._previous_extracted_value = value
+
     def get_charset_hint(self, partial_value):
         """
         Returns a prioritized charset based on what characters are most likely
@@ -2721,8 +2778,9 @@ class SchemaPredictor(object):
 
         total_attempts = self.stats_hits + self.stats_misses
         has_quick_schema = (self.stats_quick_tables_confirmed + self.stats_quick_columns_confirmed) > 0
+        has_prefix_skip = self.stats_prefix_skips > 0
 
-        if total_attempts == 0 and not has_quick_schema:
+        if total_attempts == 0 and not has_quick_schema and not has_prefix_skip:
             return None
 
         # Determine timing source
@@ -2767,6 +2825,16 @@ class SchemaPredictor(object):
                 (quick_time_saved - quick_time_cost) / 60.0,
                 avg_q_time, timing_source))
 
+        # ─── Prefix Skip Stats ───
+        if has_prefix_skip:
+            prefix_queries_saved = self.stats_prefix_chars_saved * queries_per_char
+            prefix_queries_cost = self.stats_prefix_skips  # 1 MID() query per skip
+            net_prefix = prefix_queries_saved - prefix_queries_cost
+            prefix_time_saved = net_prefix * avg_q_time
+
+            lines.append("prefix skip stats - skips: %d, chars saved: %d, queries saved: %d" % (
+                self.stats_prefix_skips, self.stats_prefix_chars_saved, net_prefix))
+
         # ─── Bisection Predictor Stats ───
         if total_attempts > 0:
             net_queries = self.stats_queries_saved - self.stats_queries_wasted
@@ -2787,6 +2855,10 @@ class SchemaPredictor(object):
         if has_quick_schema:
             total_time_saved += (quick_time_saved - quick_time_cost)
             total_queries_net += net_quick
+
+        if has_prefix_skip:
+            total_time_saved += prefix_time_saved
+            total_queries_net += net_prefix
 
         if total_time_saved > 0 or total_queries_net > 0:
             lines.append("TOTAL verdict: BENEFICIAL (saved %+d queries, ~%.1f min at %.2fs/query)" % (

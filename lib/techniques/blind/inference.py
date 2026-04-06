@@ -229,6 +229,10 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                         partialValue = prefix_str
                         firstChar = len(prefix_str)
 
+                        # Track prefix skip stats
+                        predictor.stats_prefix_skips += 1
+                        predictor.stats_prefix_chars_saved += len(prefix_str)
+
                         infoMsg = "predictor prefix skip: verified '%s' (%d chars skipped)" % (
                             prefix_str, len(prefix_str))
                         logger.info(infoMsg)
@@ -940,7 +944,20 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                     if not val:
                         val = getChar(index, otherCharset, otherCharset == asciiTbl)
                 elif not predictorHandled:
-                    val = getChar(index, asciiTbl, not (charsetType is None and conf.charset))
+                    # ─── Nostradamus: Ordered extraction min-char optimization ───
+                    # If extracting ordered values (e.g., table names from information_schema),
+                    # trim characters below the minimum possible based on the previous value.
+                    effectiveCharset = asciiTbl
+                    if (kb.get("predictor") and not conf.get("noPredict")
+                            and kb.predictor._initialized
+                            and kb.predictor._previous_extracted_value):
+                        minChar = kb.predictor.get_min_char_for_position(partialValue, index)
+                        if minChar is not None:
+                            trimmed = [c for c in asciiTbl if c >= minChar]
+                            if trimmed and len(trimmed) < len(asciiTbl):
+                                effectiveCharset = trimmed
+
+                    val = getChar(index, effectiveCharset, not (charsetType is None and conf.charset))
 
                 if val is None:
                     finalValue = partialValue
@@ -983,6 +1000,9 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
             # Feed discovered value to the schema predictor for future predictions
             if kb.get("predictor") and finalValue and not re.search(r"(?i)(\b|CHAR_)(LENGTH|LEN|COUNT)\(", expression):
                 kb.predictor.learn(finalValue)
+
+                # Track for ordered extraction min-char optimization
+                kb.predictor.set_previous_value(finalValue)
 
                 # Learn IP prefix for cross-row prediction
                 if kb.predictor._current_column_context:
