@@ -867,9 +867,9 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                         break
 
                     # Charset hints - FREE optimization (no extra queries)
-                    # Only reorder charset if we have strong hints (many candidates)
-                    # to avoid degrading bisection performance with bad hints
-                    if not val and len(partialValue) >= 2:
+                    # Only apply for boolean-based blind; time-based blind has a sensitive
+                    # statistical model that breaks when the charset order changes
+                    if not val and len(partialValue) >= 2 and not timeBasedCompare:
                         charsetHint = predictor.get_charset_hint(partialValue)
                         if charsetHint and len(charsetHint) >= 3:
                             hintSet = set(charsetHint)
