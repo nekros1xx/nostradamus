@@ -2631,11 +2631,9 @@ class SchemaPredictor(object):
         Returns the minimum possible character (as ord value) for the given position,
         based on the alphabetical ordering of values from information_schema.
 
-        If we extracted tables in order and the previous table was 'erp_customers',
-        then the next table at position 5 (after 'erp_') must have char >= 'c'.
-
-        If the partial value already diverges from the previous value (e.g., partial='erp_d'
-        vs previous='erp_customers'), all chars are possible since 'd' > 'c'.
+        MySQL uses case-insensitive collation, so 'COMCliente' < 'COMDetallePedido'
+        because 'C' < 'D' case-insensitively. We return the UPPERCASE version of the
+        min char to safely cover both cases (since uppercase has lower ASCII values).
 
         Args:
             partial_value: characters extracted so far for current value
@@ -2660,16 +2658,18 @@ class SchemaPredictor(object):
                 break
             if i < len(partial_value):
                 if partial_value[i].lower() > prev[i].lower():
-                    # Current value already > previous at an earlier position
                     return None
                 elif partial_value[i].lower() < prev[i].lower():
-                    # Should not happen in ordered extraction, but be safe
                     return None
 
         # If we reach here, all chars up to current position match the previous value
-        # So the current position char must be >= the corresponding char in prev
+        # Return the UPPERCASE version of the char — this is the lowest ASCII value
+        # that's valid, and covers both 'D' (68) and 'd' (100) when min is 'd'
         if idx < len(prev):
-            return ord(prev[idx].lower())
+            ch = prev[idx]
+            if ch.isalpha():
+                return ord(ch.upper())
+            return ord(ch)
 
         return None
 
