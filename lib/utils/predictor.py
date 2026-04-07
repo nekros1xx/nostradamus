@@ -2796,7 +2796,13 @@ class SchemaPredictor(object):
             avg_q_time = self.stats_avg_query_time
         else:
             timing_source = "estimated"
-            avg_q_time = conf.get("timeSec") or 5
+            # Try conf.timeSec (the --time-sec value), fall back to 5
+            try:
+                avg_q_time = float(conf.timeSec) if conf.timeSec else 5.0
+            except (AttributeError, TypeError, ValueError):
+                avg_q_time = 5.0
+            if avg_q_time <= 0:
+                avg_q_time = 5.0
 
         lines = []
         if self._detected_cms:
