@@ -1558,6 +1558,8 @@ class SchemaPredictor(object):
         self.stats_quick_columns_missed = 0      # columns checked but not found
         self.stats_prefix_skips = 0              # number of prefix skip verifications
         self.stats_prefix_chars_saved = 0        # total characters skipped via prefix
+        self.stats_ordered_trims = 0             # number of charset trims via ordered extraction
+        self.stats_ordered_chars_removed = 0     # total chars removed from charsets via ordering
 
         # Precomputed lowercase sets for fast column type detection
         self._hash_col_lower = set(h.lower() for h in self.HASH_COLUMN_NAMES)
@@ -2773,107 +2775,86 @@ class SchemaPredictor(object):
 
     def get_efficiency_report(self):
         """
-        Returns a human-readable efficiency report string.
-        Includes both bisection predictor stats and quick schema stats.
-        Uses real timing data when available, falls back to estimates.
+        Returns a human-readable efficiency report.
+        Shows queries saved by each optimization layer.
         """
 
         total_attempts = self.stats_hits + self.stats_misses
         has_quick_schema = (self.stats_quick_tables_confirmed + self.stats_quick_columns_confirmed) > 0
         has_prefix_skip = self.stats_prefix_skips > 0
+        has_ordered = self.stats_ordered_trims > 0
 
-        if total_attempts == 0 and not has_quick_schema and not has_prefix_skip:
+        if total_attempts == 0 and not has_quick_schema and not has_prefix_skip and not has_ordered:
             return None
 
-        # Constants for savings estimation
         queries_per_char = 8
         avg_table_len = 12
         avg_col_len = 8
-
-        # Determine timing source
-        if self.stats_avg_query_time > 0:
-            timing_source = "measured"
-            avg_q_time = self.stats_avg_query_time
-        else:
-            timing_source = "estimated"
-            # Try conf.timeSec (the --time-sec value), fall back to 5
-            try:
-                avg_q_time = float(conf.timeSec) if conf.timeSec else 5.0
-            except (AttributeError, TypeError, ValueError):
-                avg_q_time = 5.0
-            if avg_q_time <= 0:
-                avg_q_time = 5.0
+        total_queries_saved = 0
 
         lines = []
         if self._detected_cms:
             lines.append("predictor CMS detected: %s" % self._detected_cms)
 
-        # ─── Quick Schema Stats ───
+        # ─── Quick Schema ───
         if has_quick_schema:
-            quick_table_queries_saved = self.stats_quick_tables_confirmed * avg_table_len * queries_per_char
-            quick_table_queries_cost = self.stats_quick_tables_confirmed + self.stats_quick_tables_missed
-            quick_col_queries_saved = self.stats_quick_columns_confirmed * avg_col_len * queries_per_char
-            quick_col_queries_cost = self.stats_quick_columns_confirmed + self.stats_quick_columns_missed
+            quick_table_saved = self.stats_quick_tables_confirmed * avg_table_len * queries_per_char
+            quick_col_saved = self.stats_quick_columns_confirmed * avg_col_len * queries_per_char
+            quick_cost = (self.stats_quick_tables_confirmed + self.stats_quick_tables_missed +
+                          self.stats_quick_columns_confirmed + self.stats_quick_columns_missed)
+            net_quick = quick_table_saved + quick_col_saved - quick_cost
+            total_queries_saved += net_quick
 
-            total_quick_saved = quick_table_queries_saved + quick_col_queries_saved
-            total_quick_cost = quick_table_queries_cost + quick_col_queries_cost
-            net_quick = total_quick_saved - total_quick_cost
+            lines.append("quick schema - tables: %d, columns: %d, queries saved: %+d" % (
+                self.stats_quick_tables_confirmed, self.stats_quick_columns_confirmed, net_quick))
 
-            quick_time_saved = total_quick_saved * avg_q_time
-            quick_time_cost = total_quick_cost * avg_q_time
-
-            lines.append("quick schema stats - tables confirmed: %d, columns confirmed: %d" % (
-                self.stats_quick_tables_confirmed, self.stats_quick_columns_confirmed))
-            lines.append("quick schema stats - queries saved: %d, queries spent: %d, net: %+d queries" % (
-                total_quick_saved, total_quick_cost, net_quick))
-            lines.append("quick schema stats - time saved: %.1fs = %.1f min (at %.2fs/query %s)" % (
-                quick_time_saved - quick_time_cost,
-                (quick_time_saved - quick_time_cost) / 60.0,
-                avg_q_time, timing_source))
-
-        # ─── Prefix Skip Stats ───
+        # ─── Prefix Skip ───
         if has_prefix_skip:
-            prefix_queries_saved = self.stats_prefix_chars_saved * queries_per_char
-            prefix_queries_cost = self.stats_prefix_skips  # 1 MID() query per skip
-            net_prefix = prefix_queries_saved - prefix_queries_cost
-            prefix_time_saved = net_prefix * avg_q_time
+            prefix_saved = self.stats_prefix_chars_saved * queries_per_char
+            prefix_cost = self.stats_prefix_skips
+            net_prefix = prefix_saved - prefix_cost
+            total_queries_saved += net_prefix
 
-            lines.append("prefix skip stats - skips: %d, chars saved: %d, queries saved: %d" % (
+            lines.append("prefix skip - skips: %d, chars saved: %d, queries saved: %+d" % (
                 self.stats_prefix_skips, self.stats_prefix_chars_saved, net_prefix))
 
-        # ─── Bisection Predictor Stats ───
+        # ─── Ordered Extraction ───
+        if has_ordered:
+            # Each removed char from charset saves ~0.15 queries on average
+            # (reducing charset from 95 to 28 saves ~1.7 queries per char position)
+            import math
+            ordered_queries_saved = 0
+            if self.stats_ordered_trims > 0 and self.stats_ordered_chars_removed > 0:
+                avg_removed = self.stats_ordered_chars_removed / self.stats_ordered_trims
+                avg_original = 95
+                avg_trimmed = avg_original - avg_removed
+                if avg_trimmed > 0:
+                    # bisection: log2(original) - log2(trimmed) queries saved per trim
+                    saved_per_trim = math.log2(avg_original) - math.log2(avg_trimmed)
+                    ordered_queries_saved = int(saved_per_trim * self.stats_ordered_trims)
+            total_queries_saved += ordered_queries_saved
+
+            lines.append("ordered charset - trims: %d, avg chars removed: %d, queries saved: ~%d" % (
+                self.stats_ordered_trims,
+                self.stats_ordered_chars_removed // self.stats_ordered_trims if self.stats_ordered_trims > 0 else 0,
+                ordered_queries_saved))
+
+        # ─── Bisection Predictor ───
         if total_attempts > 0:
             net_queries = self.stats_queries_saved - self.stats_queries_wasted
             hit_rate = (100.0 * self.stats_hits / total_attempts) if total_attempts > 0 else 0
-            net_time = self.stats_time_saved - self.stats_time_wasted
+            total_queries_saved += net_queries
 
-            lines.append("predictor stats - hits: %d, misses: %d, hit rate: %.0f%%" % (
-                self.stats_hits, self.stats_misses, hit_rate))
-            lines.append("predictor stats - queries saved: %d, queries wasted: %d, net: %+d queries" % (
-                self.stats_queries_saved, self.stats_queries_wasted, net_queries))
-            lines.append("predictor stats - time saved: %.1fs, time wasted: %.1fs" % (
-                self.stats_time_saved, self.stats_time_wasted))
+            lines.append("predictor - hits: %d, misses: %d, hit rate: %.0f%%, queries saved: %+d" % (
+                self.stats_hits, self.stats_misses, hit_rate, net_queries))
 
-        # ─── Total Verdict ───
-        total_time_saved = self.stats_time_saved - self.stats_time_wasted
-        total_queries_net = self.stats_queries_saved - self.stats_queries_wasted
-
-        if has_quick_schema:
-            total_time_saved += (quick_time_saved - quick_time_cost)
-            total_queries_net += net_quick
-
-        if has_prefix_skip:
-            total_time_saved += prefix_time_saved
-            total_queries_net += net_prefix
-
-        if total_time_saved > 0 or total_queries_net > 0:
-            lines.append("TOTAL verdict: BENEFICIAL (saved %+d queries, ~%.1f min at %.2fs/query)" % (
-                total_queries_net, total_time_saved / 60.0, avg_q_time))
-        elif total_time_saved < 0:
-            lines.append("TOTAL verdict: DETRIMENTAL (wasted %.1fs = %.1f min, consider --no-predict)" % (
-                abs(total_time_saved), abs(total_time_saved) / 60.0))
+        # ─── Total ───
+        if total_queries_saved > 0:
+            lines.append("TOTAL: %+d queries saved" % total_queries_saved)
+        elif total_queries_saved < 0:
+            lines.append("TOTAL: %d queries wasted (consider --no-predict)" % total_queries_saved)
         else:
-            lines.append("TOTAL verdict: NEUTRAL (no net effect)")
+            lines.append("TOTAL: neutral (no net effect)")
 
         return lines
 

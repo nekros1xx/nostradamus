@@ -955,11 +955,18 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                         if minChar is not None:
                             trimmed = [c for c in asciiTbl if c >= minChar]
                             if trimmed and len(trimmed) < len(asciiTbl):
+                                removed = len(asciiTbl) - len(trimmed)
                                 effectiveCharset = trimmed
-                                debugMsg = "ordered extraction: pos %d charset trimmed to '%s'-'%s' (%d chars, -%d)" % (
+
+                                # Track stats
+                                kb.predictor.stats_ordered_trims += 1
+                                kb.predictor.stats_ordered_chars_removed += removed
+
+                                # Human-readable display
+                                infoMsg = "charset[%d]: '%s'...'%s' (%d chars, skipped %d)" % (
                                     index, chr(trimmed[0]), chr(trimmed[-1]),
-                                    len(trimmed), len(asciiTbl) - len(trimmed))
-                                logger.debug(debugMsg)
+                                    len(trimmed), removed)
+                                logger.info(infoMsg)
 
                     val = getChar(index, effectiveCharset, not (charsetType is None and conf.charset))
 
