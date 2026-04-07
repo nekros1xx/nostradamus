@@ -963,11 +963,15 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                                 kb.predictor.stats_ordered_chars_removed += (originalSize - len(trimmed))
                                 kb.predictor.stats_ordered_original_total += originalSize
 
-                                # Human-readable display
-                                infoMsg = "charset[%d]: '%s'...'%s' (%d/%d chars)" % (
-                                    index, chr(trimmed[0]), chr(trimmed[-1]),
-                                    len(trimmed), originalSize)
-                                logger.info(infoMsg)
+                                # Only show charset log for positions AFTER the learned prefix
+                                # (positions within the prefix are noise — we already know those chars)
+                                learned_prefixes = kb.predictor._patterns.get("prefixes", {})
+                                max_prefix_len = max((len(p) for p in learned_prefixes), default=0)
+                                if index > max_prefix_len:
+                                    infoMsg = "charset[%d]: '%s'...'%s' (%d/%d chars)" % (
+                                        index, chr(trimmed[0]), chr(trimmed[-1]),
+                                        len(trimmed), originalSize)
+                                    logger.info(infoMsg)
 
                     val = getChar(index, effectiveCharset, not (charsetType is None and conf.charset))
 
