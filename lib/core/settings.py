@@ -20,7 +20,7 @@ from lib.core.enums import OS
 from thirdparty import six
 
 # nostradamus version - based on sqlmap with schema prediction engine
-VERSION = "1.3.0"
+VERSION = "1.1.0"
 TYPE = "stable"
 TYPE_COLORS = {"dev": 33, "stable": 90, "pip": 34}
 VERSION_STRING = "nostradamus/%s#%s" % ('.'.join(VERSION.split('.')[:-1]) if VERSION.count('.') > 2 and VERSION.split('.')[-1] == '0' else VERSION, TYPE)

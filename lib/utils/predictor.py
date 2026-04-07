@@ -1834,6 +1834,7 @@ class SchemaPredictor(object):
 
         if table_name and table_name != self._current_table_context:
             self._current_table_context = table_name
+            self._previous_extracted_value = None  # reset ordered extraction
             self._load_columns_for_table(table_name)
 
     def _load_columns_for_table(self, table_name):
@@ -1872,6 +1873,7 @@ class SchemaPredictor(object):
 
         if column_name and column_name != self._current_column_context:
             self._current_column_context = column_name
+            self._previous_extracted_value = None  # reset ordered extraction
             self._load_values_for_column(column_name)
 
     def _load_values_for_column(self, column_name):
