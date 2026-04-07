@@ -2785,6 +2785,11 @@ class SchemaPredictor(object):
         if total_attempts == 0 and not has_quick_schema and not has_prefix_skip:
             return None
 
+        # Constants for savings estimation
+        queries_per_char = 8
+        avg_table_len = 12
+        avg_col_len = 8
+
         # Determine timing source
         if self.stats_avg_query_time > 0:
             timing_source = "measured"
@@ -2799,13 +2804,6 @@ class SchemaPredictor(object):
 
         # ─── Quick Schema Stats ───
         if has_quick_schema:
-            # Each table confirmed by quick schema saves ~12 chars * 8 queries = 96 queries
-            # Each column confirmed saves ~8 chars * 8 queries = 64 queries
-            # Each quick check costs 1 query (existence check)
-            avg_table_len = 12  # average table name length
-            avg_col_len = 8     # average column name length
-            queries_per_char = 8  # bisection queries per char
-
             quick_table_queries_saved = self.stats_quick_tables_confirmed * avg_table_len * queries_per_char
             quick_table_queries_cost = self.stats_quick_tables_confirmed + self.stats_quick_tables_missed
             quick_col_queries_saved = self.stats_quick_columns_confirmed * avg_col_len * queries_per_char
