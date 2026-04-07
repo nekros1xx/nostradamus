@@ -1560,6 +1560,7 @@ class SchemaPredictor(object):
         self.stats_prefix_chars_saved = 0        # total characters skipped via prefix
         self.stats_ordered_trims = 0             # number of charset trims via ordered extraction
         self.stats_ordered_chars_removed = 0     # total chars removed from charsets via ordering
+        self.stats_ordered_original_total = 0    # sum of original charset sizes before trimming
 
         # Precomputed lowercase sets for fast column type detection
         self._hash_col_lower = set(h.lower() for h in self.HASH_COLUMN_NAMES)
@@ -2820,23 +2821,20 @@ class SchemaPredictor(object):
 
         # ─── Ordered Extraction ───
         if has_ordered:
-            # Each removed char from charset saves ~0.15 queries on average
-            # (reducing charset from 95 to 28 saves ~1.7 queries per char position)
             import math
             ordered_queries_saved = 0
-            if self.stats_ordered_trims > 0 and self.stats_ordered_chars_removed > 0:
-                avg_removed = self.stats_ordered_chars_removed / self.stats_ordered_trims
-                avg_original = 95
-                avg_trimmed = avg_original - avg_removed
-                if avg_trimmed > 0:
-                    # bisection: log2(original) - log2(trimmed) queries saved per trim
+            if self.stats_ordered_trims > 0 and self.stats_ordered_original_total > 0:
+                avg_original = self.stats_ordered_original_total / self.stats_ordered_trims
+                avg_trimmed = avg_original - (self.stats_ordered_chars_removed / self.stats_ordered_trims)
+                if avg_trimmed > 1 and avg_original > avg_trimmed:
                     saved_per_trim = math.log2(avg_original) - math.log2(avg_trimmed)
                     ordered_queries_saved = int(saved_per_trim * self.stats_ordered_trims)
             total_queries_saved += ordered_queries_saved
 
-            lines.append("ordered charset - trims: %d, avg chars removed: %d, queries saved: ~%d" % (
+            lines.append("ordered charset - trims: %d, avg charset: %d -> %d, queries saved: ~%d" % (
                 self.stats_ordered_trims,
-                self.stats_ordered_chars_removed // self.stats_ordered_trims if self.stats_ordered_trims > 0 else 0,
+                int(self.stats_ordered_original_total / self.stats_ordered_trims) if self.stats_ordered_trims > 0 else 0,
+                int((self.stats_ordered_original_total - self.stats_ordered_chars_removed) / self.stats_ordered_trims) if self.stats_ordered_trims > 0 else 0,
                 ordered_queries_saved))
 
         # ─── Bisection Predictor ───
