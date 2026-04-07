@@ -956,6 +956,10 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                             trimmed = [c for c in asciiTbl if c >= minChar]
                             if trimmed and len(trimmed) < len(asciiTbl):
                                 effectiveCharset = trimmed
+                                debugMsg = "ordered extraction: pos %d charset trimmed to '%s'-'%s' (%d chars, -%d)" % (
+                                    index, chr(trimmed[0]), chr(trimmed[-1]),
+                                    len(trimmed), len(asciiTbl) - len(trimmed))
+                                logger.debug(debugMsg)
 
                     val = getChar(index, effectiveCharset, not (charsetType is None and conf.charset))
 
