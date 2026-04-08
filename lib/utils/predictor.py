@@ -1206,14 +1206,36 @@ class SchemaPredictor(object):
 
     # Common email domains (loaded after @ is detected in partial value)
     EMAIL_DOMAINS = (
+        # Top global
         "gmail.com", "hotmail.com", "yahoo.com", "outlook.com",
         "live.com", "icloud.com", "protonmail.com", "mail.com",
         "aol.com", "zoho.com", "yandex.com", "gmx.com",
-        "hotmail.es", "yahoo.es", "outlook.es",
-        "hotmail.co.uk", "yahoo.co.uk",
-        "gmail.com.br", "hotmail.com.br", "yahoo.com.br",
-        "gmail.com.ar", "hotmail.com.ar", "yahoo.com.ar",
-        "yahoo.com.mx", "hotmail.com.mx",
+        # Privacy / secure
+        "proton.me", "pm.me", "tutanota.com", "tutamail.com",
+        "fastmail.com", "hey.com", "mailfence.com", "posteo.de",
+        "disroot.org", "riseup.net", "runbox.com",
+        # Apple / Microsoft legacy
+        "me.com", "mac.com", "msn.com", "live.co.uk",
+        "windowslive.com", "passport.com",
+        # Yahoo variants
+        "ymail.com", "rocketmail.com", "yahoo.co.uk",
+        "yahoo.co.jp", "yahoo.fr", "yahoo.de",
+        # Regional popular
+        "mail.ru", "yandex.ru", "rambler.ru", "bk.ru",
+        "list.ru", "inbox.ru",
+        "web.de", "gmx.de", "gmx.net", "freenet.de",
+        "t-online.de", "arcor.de",
+        "libero.it", "virgilio.it", "alice.it", "tin.it",
+        "orange.fr", "wanadoo.fr", "free.fr", "sfr.fr",
+        "laposte.net", "bbox.fr",
+        "terra.com.br", "uol.com.br", "bol.com.br", "ig.com.br",
+        "terra.com", "terra.es",
+        # Business / ISP
+        "comcast.net", "verizon.net", "att.net", "sbcglobal.net",
+        "cox.net", "charter.net", "earthlink.net",
+        "btinternet.com", "sky.com", "ntlworld.com",
+        # Education / org
+        "edu", "ac.uk", "edu.au",
     )
 
     # Hash structure: known total lengths and valid charsets per hash type
@@ -1579,6 +1601,9 @@ class SchemaPredictor(object):
         self._auto_detected_charset = None
         self._auto_detected_hash_type = None
         self._auto_detected_hash_prefix = None
+
+        # Learned email domain from previous extractions
+        self._learned_email_domain = None
 
     def initialize(self):
         """
@@ -2622,6 +2647,7 @@ class SchemaPredictor(object):
         self._auto_detected_charset = None
         self._auto_detected_hash_type = None
         self._auto_detected_hash_prefix = None
+        self._learned_email_domain = None
 
     def get_hash_prefix_to_skip(self):
         """
