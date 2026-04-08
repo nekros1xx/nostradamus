@@ -2654,6 +2654,7 @@ class SchemaPredictor(object):
         self._auto_detected_hash_type = None
         self._auto_detected_hash_prefix = None
         self._learned_email_domain = None
+        self._email_charset_logged = False
 
     def learn_target_domain(self):
         """
@@ -2764,7 +2765,14 @@ class SchemaPredictor(object):
 
         if is_email:
             email_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.@_+-"
-            return sorted(set(ord(c) for c in email_chars))
+            charset = sorted(set(ord(c) for c in email_chars))
+
+            if not hasattr(self, '_email_charset_logged') or not self._email_charset_logged:
+                infoMsg = "email column detected: charset restricted to %d chars" % len(charset)
+                logger.info(infoMsg)
+                self._email_charset_logged = True
+
+            return charset
 
         # Fallback: auto-detected charset from first extracted value
         if self._auto_detected_charset:
