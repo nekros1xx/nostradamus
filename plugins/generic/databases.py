@@ -608,9 +608,17 @@ class Databases(object):
 
                                 kb.predictor.learn(missingTable)
 
-                            infoMsg = "quick schema: all %d tables found" % len(tables)
-                            logger.info(infoMsg)
-                            break
+                            # Only break if we found ALL tables
+                            if len(tables) >= int(count):
+                                infoMsg = "quick schema: all %d tables found" % len(tables)
+                                logger.info(infoMsg)
+                                break
+                            else:
+                                # NOT IN didn't find everything — fall through to normal extraction
+                                # but skip tables we already have
+                                infoMsg = "quick schema: %d/%d tables found, falling back to blind for %d remaining" % (
+                                    len(tables), int(count), int(count) - len(tables))
+                                logger.info(infoMsg)
 
                         # ─── Normal blind extraction (no quick schema or non-MySQL) ───
                         if Backend.isDbms(DBMS.SYBASE):
@@ -633,6 +641,10 @@ class Databases(object):
                             table = safeSQLIdentificatorNaming(table, True)
                             if table.lower().strip('`') not in set(t.lower().strip('`') for t in tables):
                                 tables.append(table)
+
+                        # Break if we have all tables
+                        if _quickSchemaSwitched and len(tables) >= int(count):
+                            break
 
                     if tables:
                         kb.data.cachedTables[db] = tables
