@@ -2646,6 +2646,17 @@ class SchemaPredictor(object):
                 logger.info(infoMsg)
                 return "generic_hash"
 
+        # Check if it looks like an email (contains @)
+        if '@' in value and '.' in value.split('@')[-1] and len(value) >= 5:
+            email_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.@_+-"
+            self._auto_detected_charset = sorted(set(ord(c) for c in email_chars))
+            self._auto_detected_hash_type = "email"
+            self._auto_detected_hash_prefix = None
+
+            infoMsg = "auto-detected email column: charset restricted to %d chars" % len(self._auto_detected_charset)
+            logger.info(infoMsg)
+            return "email"
+
         return None
 
     def clear_auto_detected_charset(self):
@@ -2755,24 +2766,9 @@ class SchemaPredictor(object):
         if is_ip:
             return sorted(set(ord(c) for c in self.IP_CHARSET))
 
-        # Check if this is an email column
-        is_email = col_lower in self._email_col_lower
-        if not is_email:
-            for e in self._email_col_lower:
-                if e in col_lower or col_lower in e:
-                    is_email = True
-                    break
-
-        if is_email:
-            email_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.@_+-"
-            charset = sorted(set(ord(c) for c in email_chars))
-
-            if not hasattr(self, '_email_charset_logged') or not self._email_charset_logged:
-                infoMsg = "email column detected: charset restricted to %d chars" % len(charset)
-                logger.info(infoMsg)
-                self._email_charset_logged = True
-
-            return charset
+        # Check if this is an email column — charset restriction only applied
+        # via auto-detection from extracted values (see detect_hash_from_value)
+        # NOT by column name alone, to avoid false positives
 
         # Fallback: auto-detected charset from first extracted value
         if self._auto_detected_charset:
