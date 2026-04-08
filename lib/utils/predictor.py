@@ -1575,6 +1575,11 @@ class SchemaPredictor(object):
         # Ordered extraction: track previous value for min-char optimization
         self._previous_extracted_value = None
 
+        # Auto-detected charset restriction from value patterns (hash, etc.)
+        self._auto_detected_charset = None
+        self._auto_detected_hash_type = None
+        self._auto_detected_hash_prefix = None
+
     def initialize(self):
         """
         Load static dictionaries into the trie.
@@ -1877,6 +1882,7 @@ class SchemaPredictor(object):
         if column_name and column_name != self._current_column_context:
             self._current_column_context = column_name
             self._previous_extracted_value = None  # reset ordered extraction
+            self.clear_auto_detected_charset()      # reset auto-detected hash charset
             self._load_values_for_column(column_name)
 
     def _load_values_for_column(self, column_name):
@@ -2540,6 +2546,97 @@ class SchemaPredictor(object):
 
         return result
 
+    def detect_hash_from_value(self, value):
+        """
+        Auto-detect if a value is a hash based on its pattern.
+        If detected, sets _auto_detected_charset for subsequent extractions
+        and _auto_detected_hash_prefix for prefix skip.
+        Called after the first value in a column is fully extracted.
+
+        Returns:
+            str: hash type name if detected, None otherwise
+        """
+
+        if not value or len(value) < 16:
+            return None
+
+        # Already detected for this column
+        if self._auto_detected_hash_type:
+            return self._auto_detected_hash_type
+
+        # Check known hash prefixes
+        hash_patterns = {
+            "phpass": (["$P$", "$H$"], 34),
+            "bcrypt": (["$2y$10$", "$2y$12$", "$2a$10$", "$2a$12$", "$2b$10$"], 60),
+            "md5_crypt": (["$1$"], None),
+            "sha256_crypt": (["$5$"], None),
+            "sha512_crypt": (["$6$"], None),
+            "mysql_native": (["*"], 41),
+        }
+
+        for hash_type, (prefixes, expected_len) in hash_patterns.items():
+            for prefix in prefixes:
+                if value.startswith(prefix):
+                    if hash_type in self.HASH_STRUCTURES:
+                        self._auto_detected_charset = sorted(set(ord(c) for c in self.HASH_STRUCTURES[hash_type]["charset"]))
+                        self._auto_detected_hash_type = hash_type
+                        self._auto_detected_hash_prefix = prefix
+
+                        infoMsg = "auto-detected hash type: %s (prefix '%s', charset: %d chars)" % (
+                            hash_type, prefix, len(self._auto_detected_charset))
+                        logger.info(infoMsg)
+                        return hash_type
+
+        # Check if it's pure hex (MD5, SHA1, SHA256)
+        hex_lengths = {32: "md5_hex", 40: "sha1_hex", 64: "sha256_hex"}
+        if len(value) in hex_lengths and all(c in "0123456789abcdefABCDEF" for c in value):
+            hash_type = hex_lengths[len(value)]
+            if hash_type in self.HASH_STRUCTURES:
+                self._auto_detected_charset = sorted(set(ord(c) for c in self.HASH_STRUCTURES[hash_type]["charset"]))
+                self._auto_detected_hash_type = hash_type
+                self._auto_detected_hash_prefix = None  # no fixed prefix for hex hashes
+
+                infoMsg = "auto-detected hash type: %s (%d hex chars, charset: %d chars)" % (
+                    hash_type, len(value), len(self._auto_detected_charset))
+                logger.info(infoMsg)
+                return hash_type
+
+        # Check if it looks like a generic hash (high entropy, limited charset)
+        if len(value) >= 20:
+            unique_chars = set(value)
+            hash_chars = set("0123456789abcdefABCDEF$./+*=")
+            if unique_chars.issubset(hash_chars):
+                generic_charset = "0123456789abcdefABCDEF$./+*="
+                self._auto_detected_charset = sorted(set(ord(c) for c in generic_charset))
+                self._auto_detected_hash_type = "generic_hash"
+                self._auto_detected_hash_prefix = None
+
+                infoMsg = "auto-detected hash pattern (charset: %d chars)" % len(self._auto_detected_charset)
+                logger.info(infoMsg)
+                return "generic_hash"
+
+        return None
+
+    def clear_auto_detected_charset(self):
+        """Reset auto-detected charset when switching columns."""
+        self._auto_detected_charset = None
+        self._auto_detected_hash_type = None
+        self._auto_detected_hash_prefix = None
+
+    def get_hash_prefix_to_skip(self):
+        """
+        Returns the fixed prefix of the auto-detected hash type for prefix skip.
+        Uses the exact prefix found in the first extracted value.
+
+        Returns:
+            str: prefix to skip (e.g., '$P$', '$2y$10$', '*'), or None
+        """
+
+        if not self._auto_detected_hash_type or not self._auto_detected_hash_prefix:
+            return None
+
+        return self._auto_detected_hash_prefix
+
     def get_column_charset_restriction(self, column_name):
         """
         Returns a restricted charset (list of ord values) for columns with known
@@ -2584,6 +2681,10 @@ class SchemaPredictor(object):
 
         if is_ip:
             return sorted(set(ord(c) for c in self.IP_CHARSET))
+
+        # Fallback: auto-detected charset from first extracted value
+        if self._auto_detected_charset:
+            return self._auto_detected_charset
 
         return None
 

