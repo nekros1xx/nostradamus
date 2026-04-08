@@ -2754,6 +2754,18 @@ class SchemaPredictor(object):
         if is_ip:
             return sorted(set(ord(c) for c in self.IP_CHARSET))
 
+        # Check if this is an email column
+        is_email = col_lower in self._email_col_lower
+        if not is_email:
+            for e in self._email_col_lower:
+                if e in col_lower or col_lower in e:
+                    is_email = True
+                    break
+
+        if is_email:
+            email_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.@_+-"
+            return sorted(set(ord(c) for c in email_chars))
+
         # Fallback: auto-detected charset from first extracted value
         if self._auto_detected_charset:
             return self._auto_detected_charset
