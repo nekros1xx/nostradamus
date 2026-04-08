@@ -1037,9 +1037,15 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                     # Try when we have 1-2 chars after @
                     if 1 <= len(afterAt) <= 2:
                         candidates = []
+                        # Priority 1: learned domain from previous emails
                         if hasattr(kb.predictor, '_learned_email_domain') and kb.predictor._learned_email_domain:
                             if kb.predictor._learned_email_domain.startswith(afterAt):
                                 candidates.append(kb.predictor._learned_email_domain)
+                        # Priority 2: target domain from URL
+                        if kb.predictor._target_domain and kb.predictor._target_domain.startswith(afterAt):
+                            if kb.predictor._target_domain not in candidates:
+                                candidates.append(kb.predictor._target_domain)
+                        # Priority 3: common domains
                         for domain in kb.predictor.EMAIL_DOMAINS:
                             if domain.startswith(afterAt) and domain not in candidates:
                                 candidates.append(domain)

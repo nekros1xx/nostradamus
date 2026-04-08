@@ -1605,6 +1605,9 @@ class SchemaPredictor(object):
         # Learned email domain from previous extractions
         self._learned_email_domain = None
 
+        # Target domain extracted from URL (for email prediction)
+        self._target_domain = None
+
     def initialize(self):
         """
         Load static dictionaries into the trie.
@@ -1685,6 +1688,9 @@ class SchemaPredictor(object):
             self.load_common_db_names()
 
             self._initialized = True
+
+            # Learn target domain from URL for email prediction
+            self.learn_target_domain()
 
             debugMsg = "prediction engine initialized with %d entries" % len(self._trie)
             logger.debug(debugMsg)
@@ -2648,6 +2654,45 @@ class SchemaPredictor(object):
         self._auto_detected_hash_type = None
         self._auto_detected_hash_prefix = None
         self._learned_email_domain = None
+
+    def learn_target_domain(self):
+        """
+        Extract the domain from conf.url and store it for email domain prediction.
+        Only stores if it's a real domain (not an IP address).
+        Called once during initialization.
+        """
+
+        try:
+            url = conf.url
+            if not url:
+                return
+
+            # Extract hostname from URL
+            from thirdparty.six.moves.urllib.parse import urlparse
+            parsed = urlparse(url)
+            hostname = parsed.hostname
+
+            if not hostname:
+                return
+
+            # Skip if it's an IP address
+            import re
+            if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', hostname):
+                return
+            if hostname == 'localhost':
+                return
+
+            # Remove www. prefix if present
+            if hostname.startswith('www.'):
+                hostname = hostname[4:]
+
+            self._target_domain = hostname
+
+            debugMsg = "learned target domain for email prediction: %s" % hostname
+            logger.debug(debugMsg)
+
+        except Exception:
+            pass
 
     def get_hash_prefix_to_skip(self):
         """
