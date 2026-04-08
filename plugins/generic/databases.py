@@ -561,11 +561,14 @@ class Databases(object):
                                 len(tables), int(count), missingCount)
                             logger.info(infoMsg)
 
-                            # Build the NOT IN list from all known tables
+                            # Build the NOT IN list from ALL known tables (quick schema + normally extracted)
                             knownTableNames = set()
                             for t in tables:
-                                cleanName = unsafeSQLIdentificatorNaming(t).strip('`').strip("'")
-                                knownTableNames.add(cleanName)
+                                cleanName = t.strip('`').strip("'")
+                                # Also try without safe naming wrappers
+                                if hasattr(t, 'strip'):
+                                    knownTableNames.add(cleanName)
+                                    knownTableNames.add(cleanName.lower())
 
                             notInList = ",".join("'%s'" % t for t in sorted(knownTableNames))
 
@@ -577,17 +580,33 @@ class Databases(object):
 
                                 missingTable = unArrayizeValue(inject.getValue(notInQuery, union=False, error=False))
 
-                                if not isNoneValue(missingTable):
-                                    tblName = safeSQLIdentificatorNaming(missingTable, True)
-                                    tables.append(tblName)
-                                    # Add to NOT IN list for next iteration
-                                    knownTableNames.add(missingTable.strip('`').strip("'"))
-                                    notInList = ",".join("'%s'" % t for t in sorted(knownTableNames))
+                                if isNoneValue(missingTable):
+                                    break
 
-                                    infoMsg = "quick schema: found unknown table '%s' via NOT IN query" % missingTable
-                                    logger.info(infoMsg)
+                                missingTable = str(missingTable).strip()
 
-                                    kb.predictor.learn(missingTable)
+                                # Validate: reject obviously invalid table names
+                                if len(missingTable) < 2 or not any(c.isalpha() for c in missingTable):
+                                    debugMsg = "quick schema: skipping invalid result '%s'" % missingTable
+                                    logger.debug(debugMsg)
+                                    continue
+
+                                tblName = safeSQLIdentificatorNaming(missingTable, True)
+                                cleanMissing = missingTable.strip('`').strip("'")
+
+                                # Skip if already known (case-insensitive)
+                                if cleanMissing.lower() in knownTableNames:
+                                    continue
+
+                                tables.append(tblName)
+                                knownTableNames.add(cleanMissing)
+                                knownTableNames.add(cleanMissing.lower())
+                                notInList = ",".join("'%s'" % t for t in sorted(knownTableNames))
+
+                                infoMsg = "quick schema: found unknown table '%s' via NOT IN query" % missingTable
+                                logger.info(infoMsg)
+
+                                kb.predictor.learn(missingTable)
 
                             infoMsg = "quick schema: all %d tables found" % len(tables)
                             logger.info(infoMsg)
