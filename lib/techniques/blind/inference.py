@@ -1024,6 +1024,7 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
 
                 # ─── Nostradamus: Email domain auto-complete ───
                 # After extracting @X or @XY, try to verify the full domain with MID()
+                _emailDomainHandled = False
                 if (kb.get("predictor") and not conf.get("noPredict")
                         and kb.predictor._initialized
                         and '@' in partialValue and not kb.fileReadMode):
@@ -1060,6 +1061,7 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                                 partialValue = partialValue + remaining
                                 index += len(remaining)
                                 threadData.shared.value = partialValue
+                                _emailDomainHandled = True
 
                                 # Learn this domain for future rows
                                 kb.predictor._learned_email_domain = fullDomain
@@ -1074,7 +1076,7 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
 
                 if showEta:
                     progress.progress(index)
-                elif (conf.verbose in (1, 2) and not kb.bruteMode) or conf.api:
+                elif not _emailDomainHandled and ((conf.verbose in (1, 2) and not kb.bruteMode) or conf.api):
                     dataToStdout(filterControlChars(val))
 
                 # Note: some DBMSes (e.g. Firebird, DB2, etc.) have issues with trailing spaces
