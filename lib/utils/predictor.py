@@ -2668,8 +2668,9 @@ class SchemaPredictor(object):
                 struct = self.HASH_STRUCTURES[hash_struct_name]
                 return sorted(set(ord(c) for c in struct["charset"]))
 
-            generic_hash_chars = "0123456789abcdefABCDEF$./+*=PBHDy"
-            return sorted(set(ord(c) for c in generic_hash_chars))
+            # Without CMS, do NOT apply generic hash charset by column name alone
+            # (generic charset is too restrictive for unknown hash types)
+            # Wait for auto-detection from the first extracted value instead
 
         # Check if this is an IP column (fast set lookup + substring check)
         is_ip = col_lower in self._ip_col_lower
