@@ -1908,12 +1908,36 @@ class SchemaPredictor(object):
         """
         Set the current column context for value prediction.
         Called from inference.py when extracting data values.
+        Saves/restores per-column auto-detected charset so switching
+        between columns doesn't lose detection state.
         """
 
         if column_name and column_name != self._current_column_context:
+            # Save current column's detection state
+            if self._current_column_context:
+                if not hasattr(self, '_column_detection_cache'):
+                    self._column_detection_cache = {}
+                self._column_detection_cache[self._current_column_context] = {
+                    'charset': self._auto_detected_charset,
+                    'hash_type': self._auto_detected_hash_type,
+                    'hash_prefix': self._auto_detected_hash_prefix,
+                    'email_domain': self._learned_email_domain,
+                }
+
             self._current_column_context = column_name
             self._previous_extracted_value = None  # reset ordered extraction
-            self.clear_auto_detected_charset()      # reset auto-detected hash charset
+
+            # Restore saved detection state for this column (if we've seen it before)
+            if hasattr(self, '_column_detection_cache') and column_name in self._column_detection_cache:
+                cached = self._column_detection_cache[column_name]
+                self._auto_detected_charset = cached['charset']
+                self._auto_detected_hash_type = cached['hash_type']
+                self._auto_detected_hash_prefix = cached['hash_prefix']
+                self._learned_email_domain = cached['email_domain']
+            else:
+                # New column — reset everything
+                self.clear_auto_detected_charset()
+
             self._load_values_for_column(column_name)
 
     def _load_values_for_column(self, column_name):
@@ -2588,7 +2612,7 @@ class SchemaPredictor(object):
             str: hash type name if detected, None otherwise
         """
 
-        if not value or len(value) < 16:
+        if not value or len(value) < 5:
             return None
 
         # Already detected for this column
@@ -2646,6 +2670,36 @@ class SchemaPredictor(object):
                 logger.info(infoMsg)
                 return "generic_hash"
 
+        # Check if it looks like an IPv4 address (e.g., 192.168.1.10)
+        import re
+        if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', value):
+            self._auto_detected_charset = sorted(set(ord(c) for c in self.IP_CHARSET))
+            self._auto_detected_hash_type = "ipv4"
+            self._auto_detected_hash_prefix = None
+
+            # Learn subnet prefix for cross-row prediction (e.g., "192.168.1.")
+            parts = value.split('.')
+            if len(parts) == 4:
+                subnet_prefix = '.'.join(parts[:3]) + '.'
+                self._auto_detected_hash_prefix = subnet_prefix
+
+            infoMsg = "auto-detected IPv4 column: charset restricted to %d chars, prefix '%s'" % (
+                len(self._auto_detected_charset),
+                self._auto_detected_hash_prefix or "none")
+            logger.info(infoMsg)
+            return "ipv4"
+
+        # Check if it looks like an IPv6 address (contains : and hex)
+        if ':' in value and all(c in "0123456789abcdefABCDEF:" for c in value) and len(value) >= 7:
+            ipv6_chars = "0123456789abcdefABCDEF:"
+            self._auto_detected_charset = sorted(set(ord(c) for c in ipv6_chars))
+            self._auto_detected_hash_type = "ipv6"
+            self._auto_detected_hash_prefix = None
+
+            infoMsg = "auto-detected IPv6 column: charset restricted to %d chars" % len(self._auto_detected_charset)
+            logger.info(infoMsg)
+            return "ipv6"
+
         # Check if it looks like an email (contains @)
         if '@' in value and '.' in value.split('@')[-1] and len(value) >= 5:
             email_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.@_+-"
@@ -2656,6 +2710,41 @@ class SchemaPredictor(object):
             infoMsg = "auto-detected email column: charset restricted to %d chars" % len(self._auto_detected_charset)
             logger.info(infoMsg)
             return "email"
+
+        # Check if it looks like a date/datetime value
+        import re
+        date_patterns = [
+            # YYYY-MM-DD HH:MM:SS (datetime — check BEFORE plain date)
+            (r'^\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}', "datetime"),
+            # DD-MM-YYYY HH:MM:SS or MM-DD-YYYY HH:MM:SS
+            (r'^\d{2}[-/]\d{2}[-/]\d{4}\s+\d{2}:\d{2}', "datetime_dmy"),
+            # YYYY-MM-DD or YYYY/MM/DD
+            (r'^\d{4}[-/]\d{2}[-/]\d{2}', "date_ymd"),
+            # DD-MM-YYYY or DD/MM/YYYY or MM-DD-YYYY
+            (r'^\d{2}[-/]\d{2}[-/]\d{4}', "date_dmy"),
+        ]
+
+        for pattern, date_type in date_patterns:
+            if re.match(pattern, value):
+                # Date charset: 0-9, -, /, :, space, T, Z (for ISO), +
+                date_chars = "0123456789-/:. TZ+"
+                self._auto_detected_charset = sorted(set(ord(c) for c in date_chars))
+                self._auto_detected_hash_type = date_type
+                self._auto_detected_hash_prefix = None
+
+                # Learn year prefix for prefix skip (e.g., "2024-" or "2024/")
+                if date_type in ("date_ymd", "datetime"):
+                    year_prefix = value[:5]  # e.g., "2024-"
+                    if re.match(r'^\d{4}[-/]$', year_prefix):
+                        self._auto_detected_hash_prefix = year_prefix
+                elif date_type in ("date_dmy", "datetime_dmy"):
+                    # For DD-MM-YYYY, no reliable prefix to skip
+                    # (day changes every row)
+                    pass
+
+                infoMsg = "auto-detected date column: charset restricted to %d chars" % len(self._auto_detected_charset)
+                logger.info(infoMsg)
+                return date_type
 
         return None
 
@@ -2755,16 +2844,9 @@ class SchemaPredictor(object):
             # (generic charset is too restrictive for unknown hash types)
             # Wait for auto-detection from the first extracted value instead
 
-        # Check if this is an IP column (fast set lookup + substring check)
-        is_ip = col_lower in self._ip_col_lower
-        if not is_ip:
-            for i in self._ip_col_lower:
-                if i in col_lower or col_lower in i:
-                    is_ip = True
-                    break
-
-        if is_ip:
-            return sorted(set(ord(c) for c in self.IP_CHARSET))
+        # Check if this is an IP column — charset restriction only applied
+        # via auto-detection from extracted values (see detect_hash_from_value)
+        # NOT by column name alone, to avoid false positives
 
         # Check if this is an email column — charset restriction only applied
         # via auto-detection from extracted values (see detect_hash_from_value)

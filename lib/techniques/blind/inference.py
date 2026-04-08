@@ -263,7 +263,7 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                     predictor.stats_prefix_skips += 1
                     predictor.stats_prefix_chars_saved += len(hash_prefix)
 
-                    infoMsg = "hash prefix skip: verified '%s' (%d chars skipped)" % (
+                    infoMsg = "auto prefix skip: verified '%s' (%d chars skipped)" % (
                         hash_prefix, len(hash_prefix))
                     logger.info(infoMsg)
 
@@ -1117,14 +1117,11 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                 # Auto-detect hash pattern from extracted value
                 # If first value looks like a hash, restrict charset for all subsequent rows
                 if not kb.predictor._auto_detected_hash_type:
-                    kb.predictor.detect_hash_from_value(finalValue)
-
-                # Learn IP prefix for cross-row prediction
-                if kb.predictor._current_column_context:
-                    col_lower = kb.predictor._current_column_context.lower()
-                    is_ip = any(ip.lower() in col_lower or col_lower in ip.lower() for ip in kb.predictor.IP_COLUMN_NAMES)
-                    if is_ip:
-                        kb.predictor.learn_ip_prefix(finalValue)
+                    detected = kb.predictor.detect_hash_from_value(finalValue)
+                    if detected:
+                        debugMsg = "auto-detect triggered for value '%s' -> type: %s" % (
+                            finalValue[:20] + "..." if len(finalValue) > 20 else finalValue, detected)
+                        logger.debug(debugMsg)
 
                 # Persist learned values to session hashDB for cross-run learning
                 try:
