@@ -963,11 +963,14 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                                 kb.predictor.stats_ordered_chars_removed += (originalSize - len(trimmed))
                                 kb.predictor.stats_ordered_original_total += originalSize
 
-                                # Only show charset log for positions AFTER the learned prefix
-                                # (positions within the prefix are noise — we already know those chars)
-                                learned_prefixes = kb.predictor._patterns.get("prefixes", {})
-                                max_prefix_len = max((len(p) for p in learned_prefixes), default=0)
-                                if index > max_prefix_len:
+                                # Show charset trim info
+                                # Only hide for positions within a prefix that was ALREADY SKIPPED
+                                # (partialValue set by prefix skip means those chars are known)
+                                showLog = True
+                                if partialValue and firstChar > 0 and index <= firstChar:
+                                    showLog = False  # prefix was skipped, these positions are known
+
+                                if showLog:
                                     infoMsg = "charset[%d]: '%s'...'%s' (%d/%d chars)" % (
                                         index, chr(trimmed[0]), chr(trimmed[-1]),
                                         len(trimmed), originalSize)
