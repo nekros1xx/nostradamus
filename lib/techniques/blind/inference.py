@@ -100,6 +100,7 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
     # If predictor has a charset restriction for the current column (hash, IP),
     # replace the full ASCII table with the restricted one.
     # This reduces queries per character from ~7 to ~4-5 (log2 of smaller charset).
+    _nostradamusRestrictedCharset = False
     if (kb.get("predictor") and not conf.get("noPredict")
             and kb.predictor._initialized
             and kb.predictor._current_column_context
@@ -107,6 +108,7 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
         restrictedCharset = kb.predictor.get_column_charset_restriction(kb.predictor._current_column_context)
         if restrictedCharset:
             asciiTbl = restrictedCharset
+            _nostradamusRestrictedCharset = True
             debugMsg = "predictor: restricted charset to %d chars for column '%s'" % (
                 len(restrictedCharset), kb.predictor._current_column_context)
             logger.debug(debugMsg)
@@ -1004,7 +1006,12 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                                         len(trimmed), originalSize)
                                     logger.info(infoMsg)
 
-                    val = getChar(index, effectiveCharset, not (charsetType is None and conf.charset))
+                    # Use continuousOrder=False when charset is restricted (has gaps)
+                    useContinuous = not (charsetType is None and conf.charset)
+                    if _nostradamusRestrictedCharset:
+                        useContinuous = False
+
+                    val = getChar(index, effectiveCharset, useContinuous)
 
                 if val is None:
                     finalValue = partialValue
