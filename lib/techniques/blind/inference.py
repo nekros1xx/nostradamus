@@ -1022,9 +1022,13 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
 
                 threadData.shared.value = partialValue = partialValue + val
 
+                if showEta:
+                    progress.progress(index)
+                elif (conf.verbose in (1, 2) and not kb.bruteMode) or conf.api:
+                    dataToStdout(filterControlChars(val))
+
                 # ─── Nostradamus: Email domain auto-complete ───
                 # After extracting @X or @XY, try to verify the full domain with MID()
-                _emailDomainHandled = False
                 if (kb.get("predictor") and not conf.get("noPredict")
                         and kb.predictor._initialized
                         and '@' in partialValue and not kb.fileReadMode):
@@ -1032,7 +1036,6 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                     afterAt = partialValue[atPos + 1:]
                     # Try when we have 1-2 chars after @
                     if 1 <= len(afterAt) <= 2:
-                        # Build candidates: learned domain first (only if it matches), then common
                         candidates = []
                         if hasattr(kb.predictor, '_learned_email_domain') and kb.predictor._learned_email_domain:
                             if kb.predictor._learned_email_domain.startswith(afterAt):
@@ -1041,7 +1044,7 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                             if domain.startswith(afterAt) and domain not in candidates:
                                 candidates.append(domain)
 
-                        for domain in candidates[:3]:  # max 3 attempts
+                        for domain in candidates[:3]:
                             fullDomain = domain
                             domainStartPos = atPos + 2  # 1-indexed position after @
                             testValue = unescaper.escape("'%s'" % fullDomain)
@@ -1056,14 +1059,11 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                             incrementCounter(getTechnique())
 
                             if result:
-                                # Domain verified — skip remaining chars
                                 remaining = fullDomain[len(afterAt):]
                                 partialValue = partialValue + remaining
                                 index += len(remaining)
                                 threadData.shared.value = partialValue
-                                _emailDomainHandled = True
 
-                                # Learn this domain for future rows
                                 kb.predictor._learned_email_domain = fullDomain
 
                                 infoMsg = "email domain: verified '@%s' (%d chars skipped)" % (
@@ -1073,11 +1073,6 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                                 if conf.verbose in (1, 2) and not kb.bruteMode:
                                     dataToStdout(filterControlChars(remaining))
                                 break
-
-                if showEta:
-                    progress.progress(index)
-                elif not _emailDomainHandled and ((conf.verbose in (1, 2) and not kb.bruteMode) or conf.api):
-                    dataToStdout(filterControlChars(val))
 
                 # Note: some DBMSes (e.g. Firebird, DB2, etc.) have issues with trailing spaces
                 if Backend.getIdentifiedDbms() in (DBMS.FIREBIRD, DBMS.DB2, DBMS.MAXDB, DBMS.DERBY, DBMS.FRONTBASE) and len(partialValue) > INFERENCE_BLANK_BREAK and partialValue[-INFERENCE_BLANK_BREAK:].isspace():
