@@ -1049,7 +1049,10 @@ def bisection(payload, expression, length=None, charsetType=None, firstChar=None
                 kb.predictor.learn(finalValue)
 
                 # Track for ordered extraction min-char optimization
-                kb.predictor.set_previous_value(finalValue)
+                # ONLY when extracting from information_schema or SHOW queries
+                # (data dumps are NOT alphabetically ordered)
+                if re.search(r"(?i)(information_schema|SHOW\s+)", expression):
+                    kb.predictor.set_previous_value(finalValue)
 
                 # Auto-detect hash pattern from extracted value
                 # If first value looks like a hash, restrict charset for all subsequent rows

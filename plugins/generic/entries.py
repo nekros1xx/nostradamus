@@ -353,6 +353,10 @@ class Entries(object):
                                         query = rootQuery.blind.query3 % (column, column, table, index)
                                         query = agent.whereQuery(query)
 
+                                        # Nostradamus: set column context for per-column charset restriction
+                                        if kb.get("predictor") and kb.predictor._initialized:
+                                            kb.predictor.set_column_context(column)
+
                                         value = inject.getValue(query, union=False, error=False, dump=True) or ""
 
                                         if column not in lengths:
@@ -428,6 +432,10 @@ class Entries(object):
                                         query = rootQuery.blind.query % (agent.preprocessField(tbl, column), conf.db, tbl, index)
 
                                     query = agent.whereQuery(query)
+
+                                    # Nostradamus: set column context for per-column charset restriction
+                                    if kb.get("predictor") and kb.predictor._initialized:
+                                        kb.predictor.set_column_context(column)
 
                                     value = NULL if column in emptyColumns else inject.getValue(query, union=False, error=False, dump=True)
                                     value = '' if value is None else value
