@@ -2677,15 +2677,7 @@ class SchemaPredictor(object):
             self._auto_detected_hash_type = "ipv4"
             self._auto_detected_hash_prefix = None
 
-            # Learn subnet prefix for cross-row prediction (e.g., "192.168.1.")
-            parts = value.split('.')
-            if len(parts) == 4:
-                subnet_prefix = '.'.join(parts[:3]) + '.'
-                self._auto_detected_hash_prefix = subnet_prefix
-
-            infoMsg = "auto-detected IPv4 column: charset restricted to %d chars, prefix '%s'" % (
-                len(self._auto_detected_charset),
-                self._auto_detected_hash_prefix or "none")
+            infoMsg = "auto-detected IPv4 column: charset restricted to %d chars" % len(self._auto_detected_charset)
             logger.info(infoMsg)
             return "ipv4"
 
